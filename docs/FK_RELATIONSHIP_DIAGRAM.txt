@@ -1,0 +1,192 @@
+================================================================================
+BREEZEWAY ETL - FOREIGN KEY RELATIONSHIP DIAGRAM
+================================================================================
+
+LEGEND:
+  ─→    Foreign Key (RESTRICT - prevents parent deletion)
+  ═→    Foreign Key (CASCADE - deletes children)
+  ╌→    Foreign Key (SET NULL - optional relationship)
+  [PK]  Primary Key
+  [FK]  Foreign Key
+
+
+SCHEMA: breezeway
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ LEVEL 1: REFERENCE TABLES (No Dependencies)                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌───────────────────────┐
+│  regions              │
+│  [PK] region_code     │  ← Natural Key
+│       region_name     │
+│       company_id      │
+└───────────────────────┘
+          │
+          │ (All tables FK to region_code)
+          ▼
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ LEVEL 2: PARENT ENTITIES                                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────┐
+│  properties                    │
+│  [PK] id (BIGSERIAL)          │
+│  [FK] region_code ─→ regions  │  RESTRICT
+│       property_id (API ID)     │
+│       property_name            │
+│       latitude, longitude      │
+│       ... (30+ columns)        │
+│                                │
+│  UNIQUE(property_id, region)   │
+└────────────────────────────────┘
+          │
+          ├──────────────────────────────┐
+          │                              │
+          │                              │ (CASCADE)
+          ▼                              ▼
+┌───────────────────────┐    ┌────────────────────────────┐
+│  property_photos      │    │  reservations              │
+│  [PK] id              │    │  [PK] id (BIGSERIAL)      │
+│  [FK] property_pk ═→  │    │  [FK] property_pk ─→      │  RESTRICT
+│       photo_id        │    │  [FK] region_code ─→      │  RESTRICT
+│       url             │    │       reservation_id       │
+│       caption         │    │       checkin_date         │
+└───────────────────────┘    │       checkout_date        │
+                             │       ... (15+ columns)    │
+                             │                            │
+                             │  UNIQUE(reservation_id,    │
+                             │         region_code)       │
+                             └────────────────────────────┘
+                                      │
+                                      │ (CASCADE)
+                                      ▼
+                             ┌────────────────────────────┐
+                             │  reservation_guests        │
+                             │  [PK] id                   │
+                             │  [FK] reservation_pk ═→    │
+                             │       guest_name           │
+                             │       guest_email          │
+                             │       guest_phone          │
+                             └────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ LEVEL 3: COMPLEX ENTITY (Multiple Parent FKs)                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                  ┌─── From properties
+                  │    ┌─── From reservations (optional)
+                  │    │
+                  ▼    ▼
+┌────────────────────────────────────────────────────┐
+│  tasks                                             │
+│  [PK] id (BIGSERIAL)                              │
+│  [FK] property_pk ─→ properties                   │  RESTRICT
+│  [FK] reservation_pk ╌→ reservations (nullable)   │  SET NULL
+│  [FK] region_code ─→ regions                      │  RESTRICT
+│       task_id (API ID)                             │
+│       task_name                                    │
+│       task_status                                  │
+│       scheduled_date                               │
+│       ... (30+ columns)                            │
+│                                                    │
+│  UNIQUE(task_id, region_code)                     │
+└────────────────────────────────────────────────────┘
+          │
+          │ (CASCADE to all children)
+          │
+          ├───────────────┬──────────────┬──────────────┬───────────────┐
+          │               │              │              │               │
+          ▼               ▼              ▼              ▼               ▼
+┌──────────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────────┐  ┌─────────────┐
+│task_         │  │task_comments │  │task_     │  │task_         │  │task_tags    │
+│assignments   │  │              │  │photos    │  │requirements  │  │             │
+│              │  │              │  │          │  │              │  │[FK] task_pk │
+│[FK] task_pk  │  │[FK] task_pk  │  │[FK]      │  │[FK] task_pk  │  │[FK] tag_pk  │
+│              │  │              │  │task_pk   │  │              │  │             │
+│assignee_id   │  │comment_id    │  │          │  │requirement_  │  │Many-to-Many │
+│assignee_name │  │comment       │  │photo_id  │  │id            │  │Bridge Table │
+│              │  │author_name   │  │url       │  │section_name  │  │             │
+└──────────────┘  └──────────────┘  └──────────┘  └──────────────┘  └─────────────┘
+                                                                              │
+                                                                              │ (FROM)
+                                                                              ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ INDEPENDENT ENTITIES                                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│  tags            │    │  people          │    │  supplies        │
+│  [PK] id         │    │  [PK] id         │    │  [PK] id         │
+│  [FK] region ─→  │    │  [FK] region ─→  │    │  [FK] region ─→  │
+│       tag_id     │    │       person_id  │    │       supply_id  │
+│       tag_name   │    │       name       │    │       name       │
+│                  │    │       active     │    │       stock_count│
+│  UNIQUE(tag_id,  │    │  UNIQUE(person,  │    │  UNIQUE(supply,  │
+│         region)  │    │         region)  │    │         region)  │
+└──────────────────┘    └──────────────────┘    └──────────────────┘
+
+================================================================================
+FOREIGN KEY SUMMARY
+================================================================================
+
+Total FK Constraints: 20+
+
+By Type:
+  • RESTRICT (prevent deletion):  7 constraints
+  • CASCADE (auto-delete):        12 constraints
+  • SET NULL (optional):           1 constraint
+
+By Level:
+  • region_code FKs:              14 (every table → regions)
+  • Parent → Child:                6 (various parent tables)
+
+Critical Paths:
+  regions → properties → reservations → reservation_guests
+  regions → properties → reservations → tasks → task_* (5 child tables)
+  regions → tags → task_tags
+  regions → people
+  regions → supplies
+
+================================================================================
+FK RESOLUTION IN ETL
+================================================================================
+
+Step 1: Load Parent Entities
+  • properties (no FK resolution needed, regions exist)
+  • reservations (property_id from API)
+  • tasks (home_id from API)
+
+Step 2: Resolve Parent FKs (SQL UPDATE queries)
+  • reservations.property_pk ← properties.id (via property_id match)
+  • tasks.property_pk ← properties.id (via home_id match)
+  • tasks.reservation_pk ← reservations.id (via date overlap matching)
+
+Step 3: Load Child Entities
+  • Build parent mapping: API_ID → Database_PK (in memory)
+  • Resolve child FKs: lookup parent PK from API ID
+  • Filter orphans: drop records with unresolved FKs
+  • UPSERT children: batch insert with FK populated
+
+Special Case: task_tags (many-to-many)
+  • Resolve task_pk (standard child logic)
+  • Resolve tag_pk (special lookup from tags table)
+  • Both FKs required for insert
+
+================================================================================
+DATA INTEGRITY GUARANTEES
+================================================================================
+
+✓ Cannot insert orphaned child (DB rejects FK violation)
+✓ Cannot delete parent with children (RESTRICT prevents)
+✓ Deleting parent cascades to children (CASCADE cleans up)
+✓ Cannot insert duplicate API IDs (UNIQUE constraint)
+✓ All-or-nothing load (transactions with rollback)
+✓ FK resolution logged (warnings for unresolvable)
+
+================================================================================
+
+Generated: December 2, 2025
+Status: PRODUCTION SCHEMA
+Version: 2.0

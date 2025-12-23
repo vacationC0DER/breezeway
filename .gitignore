@@ -1,0 +1,59 @@
+# Environment and secrets
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+.venv/
+
+# Logs
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+._*
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Claude settings (local)
+.claude/
+
+# Backup files
+*.backup
+*_backup.py
+
+# Legacy individual location folders (now consolidated in etl/)
+BREEZEAWAY/
+BREEZEAWAY_*/
+
+# Archive folder
+archive/
+
+# Analytics (if contains sensitive data)
+analytics/
