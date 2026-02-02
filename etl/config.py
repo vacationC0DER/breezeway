@@ -109,7 +109,11 @@ ENTITY_CONFIGS = {
             'longitude': 'longitude_numeric',
             'display': 'property_display',
             'wifi_name': 'wifi_name',
-            'wifi_password': 'wifi_password'
+            'wifi_password': 'wifi_password',
+            'bedrooms': 'bedrooms',
+            'bathrooms': 'bathrooms',
+            'living_area': 'living_area',
+            'year_built': 'year_built'
         },
         'nested_fields': {
             'notes': {
@@ -153,7 +157,11 @@ ENTITY_CONFIGS = {
             'guide_url': 'guide_url',
             'reference_reservation_id': 'reference_reservation_id',
             'reference_property_id': 'reference_property_id',
-            'reference_external_property_id': 'reference_external_property_id'
+            'reference_external_property_id': 'reference_external_property_id',
+            'adults': 'adults',
+            'children': 'children',
+            'pets': 'pets',
+            'source': 'source'
         }
     },
 
@@ -210,6 +218,47 @@ ENTITY_CONFIGS = {
                 'api_field': 'task_tags',
                 'parent_fk': 'task_pk',
                 'natural_key': ['task_pk', 'tag_pk']  # Matches DB constraint; tag_id resolved to tag_pk in ETL
+            },
+            'supplies': {
+                'table_name': 'task_supplies',
+                'api_field': 'supplies',
+                'parent_fk': 'task_pk',
+                'natural_key': ['task_pk', 'supply_usage_id'],
+                'fields_mapping': {
+                    'id': 'supply_usage_id',
+                    'supply_id': 'supply_id',
+                    'name': 'name',
+                    'description': 'description',
+                    'size': 'size',
+                    'quantity': 'quantity',
+                    'unit_cost': 'unit_cost',
+                    'total_price': 'total_price',
+                    'bill_to': 'bill_to',
+                    'billable': 'billable',
+                    'markup_pricing_type': 'markup_pricing_type',
+                    'markup_rate': 'markup_rate'
+                }
+            },
+            'costs': {
+                'table_name': 'task_costs',
+                'api_field': 'costs',
+                'parent_fk': 'task_pk',
+                'natural_key': ['task_pk', 'cost_id'],
+                'fields_mapping': {
+                    'id': 'cost_id',
+                    'cost': 'cost',
+                    'description': 'description',
+                    'bill_to': 'bill_to',
+                    'created_at': 'created_at',
+                    'updated_at': 'updated_at'
+                },
+                'nested_fields': {
+                    'type_cost': {
+                        'id': 'type_cost_id',
+                        'code': 'type_cost_code',
+                        'name': 'type_cost_name'
+                    }
+                }
             }
         },
         'fields_mapping': {
@@ -233,7 +282,17 @@ ENTITY_CONFIGS = {
             'checkin_date': 'checkin_date',  # For linking to reservations
             'checkout_date': 'checkout_date',  # For linking to reservations
             'report_url': 'report_url',
-            'reference_property_id': 'reference_property_id'
+            'reference_property_id': 'reference_property_id',
+            # NEW: Financial fields
+            'total_cost': 'total_cost',
+            'total_time': 'total_time',
+            'estimated_time': 'estimated_time',
+            'estimated_rate': 'estimated_rate',
+            'billable': 'billable',
+            'itemized_cost': 'itemized_cost',
+            # NEW: Task hierarchy
+            'task_series_id': 'task_series_id',
+            'parent_task_id': 'parent_task_id'
         },
         'nested_fields': {
             'created_by': {
@@ -248,6 +307,24 @@ ENTITY_CONFIGS = {
                 'code': 'task_status_code',
                 'name': 'task_status_name',
                 'stage': 'task_status_stage'
+            },
+            'subdepartment': {
+                'id': 'subdepartment_id',
+                'name': 'subdepartment_name'
+            },
+            'template': {
+                'name': 'template_name'
+            },
+            'requested_by': {
+                'id': 'requested_by_id',
+                'name': 'requested_by_name'
+            },
+            'summary': {
+                'note': 'summary_note'
+            },
+            'linked_reservation': {
+                'id': 'linked_reservation_id',
+                'external_reservation_id': 'linked_reservation_external_id'
             }
         }
     },
