@@ -711,33 +711,20 @@ class BreezewayETL:
             rows_updated = cur.rowcount
             self.logger.info(f"Resolved property_pk for {rows_updated} tasks")
 
-            # Resolve reservation_pk by matching tasks to reservations via dates
-            self.logger.info("Resolving reservation_pk for tasks based on date overlap")
+            # Resolve reservation_pk using linked_reservation_id from API response
+            self.logger.info("Resolving reservation_pk from linked_reservation_id")
             cur.execute(f"""
                 UPDATE {schema}.{table_name} t
                 SET reservation_pk = r.id
                 FROM {schema}.reservations r
-                WHERE t.property_pk = r.property_pk
+                WHERE t.linked_reservation_id = r.reservation_id
                   AND t.region_code = r.region_code
                   AND t.region_code = %s
                   AND t.reservation_pk IS NULL
-                  -- Match tasks that have checkin/checkout dates matching reservation dates
-                  AND (
-                      -- Exact match on dates
-                      (t.checkin_date = r.checkin_date AND t.checkout_date = r.checkout_date)
-                      OR
-                      -- Task scheduled around checkout (typical for housekeeping turnovers)
-                      (t.scheduled_date BETWEEN r.checkin_date AND r.checkout_date + INTERVAL '1 day'
-                       AND t.type_department = 'housekeeping')
-                      OR
-                      -- Task's date range overlaps with reservation
-                      (t.checkin_date IS NOT NULL AND t.checkout_date IS NOT NULL
-                       AND t.checkin_date <= r.checkout_date
-                       AND t.checkout_date >= r.checkin_date)
-                  )
+                  AND t.linked_reservation_id IS NOT NULL
             """, (self.region_code,))
             rows_updated = cur.rowcount
-            self.logger.info(f"Resolved reservation_pk for {rows_updated} tasks")
+            self.logger.info(f"Resolved reservation_pk for {rows_updated} tasks via linked_reservation_id")
 
     def _upsert_children(self, cur, child_type: str, records: List[Dict]):
         """UPSERT child records"""
