@@ -717,7 +717,7 @@ class BreezewayETL:
                 UPDATE {schema}.{table_name} t
                 SET reservation_pk = r.id
                 FROM {schema}.reservations r
-                WHERE t.linked_reservation_id = r.reservation_id
+                WHERE t.linked_reservation_id::varchar = r.reservation_id
                   AND t.region_code = r.region_code
                   AND t.region_code = %s
                   AND t.reservation_pk IS NULL
