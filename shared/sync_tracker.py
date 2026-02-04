@@ -6,12 +6,15 @@ Manages sync status tracking and provides incremental loading capabilities.
 Usage:
     from shared.sync_tracker import SyncTracker
 
+    # With shared connection (recommended)
+    tracker = SyncTracker('nashville', 'properties', db_conn=conn)
+    
+    # Standalone (creates own connection)
     tracker = SyncTracker('nashville', 'properties')
+    
     tracker.start()
-
     last_sync = tracker.get_last_sync_time()
     # ... do sync work ...
-
     tracker.increment_processed(count=10)
     tracker.complete()
 """
@@ -26,13 +29,14 @@ from typing import Optional, Dict
 class SyncTracker:
     """Tracks ETL sync operations and enables incremental loading"""
 
-    def __init__(self, region_code: str, entity_type: str):
+    def __init__(self, region_code: str, entity_type: str, db_conn=None):
         """
         Initialize SyncTracker.
 
         Args:
             region_code: Region identifier (e.g., 'nashville')
             entity_type: Entity being synced (e.g., 'properties', 'reservations', 'tasks')
+            db_conn: Optional database connection. If not provided, creates own connection.
         """
         self.region_code = region_code
         self.entity_type = entity_type
@@ -45,7 +49,15 @@ class SyncTracker:
         }
         self.conn = None
         self.cur = None
-        self._connect_db()
+        self._owns_connection = False
+        
+        if db_conn is not None:
+            self.conn = db_conn
+            self.cur = self.conn.cursor()
+            self._owns_connection = False
+        else:
+            self._connect_db()
+            self._owns_connection = True
 
     def _connect_db(self):
         """Establish database connection"""
@@ -194,20 +206,27 @@ class SyncTracker:
         print(f"✗ Sync failed: {self.region_code} / {self.entity_type}")
         print(f"  Error: {error_message}")
 
+    def close(self):
+        """Explicitly close database connection if we own it"""
+        if self._owns_connection:
+            if self.cur:
+                self.cur.close()
+                self.cur = None
+            if self.conn:
+                self.conn.close()
+                self.conn = None
+
     def __del__(self):
-        """Clean up database connection"""
-        if self.cur:
-            self.cur.close()
-        if self.conn:
-            self.conn.close()
+        """Clean up database connection only if we created it"""
+        self.close()
 
 
 # Context manager for automatic cleanup
 class SyncContext:
     """Context manager for sync tracking with automatic error handling"""
 
-    def __init__(self, region_code: str, entity_type: str):
-        self.tracker = SyncTracker(region_code, entity_type)
+    def __init__(self, region_code: str, entity_type: str, db_conn=None):
+        self.tracker = SyncTracker(region_code, entity_type, db_conn=db_conn)
 
     def __enter__(self):
         self.tracker.start()
@@ -215,17 +234,14 @@ class SyncContext:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
-            # No exception, mark as complete
             self.tracker.complete()
         else:
-            # Exception occurred, mark as failed
             error_msg = f"{exc_type.__name__}: {exc_val}"
             self.tracker.fail(error_msg)
-        return False  # Don't suppress exception
+        return False
 
 
 if __name__ == "__main__":
-    # Test sync tracker
     import sys
     import time
 
@@ -241,20 +257,16 @@ if __name__ == "__main__":
     print(f"Region: {region}, Entity: {entity}\n")
 
     try:
-        # Test basic usage
         tracker = SyncTracker(region, entity)
 
-        # Check last sync
         last_sync = tracker.get_last_sync_time()
         if last_sync:
             print(f"Last successful sync: {last_sync}")
         else:
             print("No previous sync found (first run)")
 
-        # Start sync
         tracker.start()
 
-        # Simulate work
         print("\nSimulating sync work...")
         time.sleep(1)
 
@@ -263,8 +275,8 @@ if __name__ == "__main__":
         tracker.increment_new(3)
         tracker.increment_updated(2)
 
-        # Complete
         tracker.complete()
+        tracker.close()
 
         print(f"\n✓ Test completed successfully")
         print(f"Stats: {tracker.get_stats()}")

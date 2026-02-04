@@ -7,7 +7,12 @@ Tokens are stored in the database and automatically refreshed when needed.
 Usage:
     from shared.auth_manager import TokenManager
 
+    # With shared connection (recommended)
+    token_mgr = TokenManager('nashville', db_conn=conn)
+    
+    # Standalone (creates own connection)
     token_mgr = TokenManager('nashville')
+    
     access_token = token_mgr.get_valid_token()
 """
 
@@ -23,23 +28,31 @@ from typing import Optional
 class TokenManager:
     """Manages OAuth2 tokens for Breezeway API with auto-refresh capability"""
 
-    def __init__(self, region_code: str):
+    def __init__(self, region_code: str, db_conn=None):
         """
         Initialize TokenManager for a specific region.
 
         Args:
             region_code: Region identifier (e.g., 'nashville', 'austin')
+            db_conn: Optional database connection. If not provided, creates own connection.
         """
         self.region_code = region_code
         self.auth_url = "https://api.breezeway.io/public/auth/v1"
         self.conn = None
         self.cur = None
-        self._connect_db()
+        self._owns_connection = False  # Track if we created the connection
+        
+        if db_conn is not None:
+            self.conn = db_conn
+            self.cur = self.conn.cursor()
+            self._owns_connection = False
+        else:
+            self._connect_db()
+            self._owns_connection = True
 
     def _connect_db(self):
         """Establish database connection"""
         try:
-            # Try to load from .env file
             env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
             envs = dict(dotenv_values(env_path))
 
@@ -90,7 +103,6 @@ class TokenManager:
         Raises:
             Exception: If token generation/refresh fails
         """
-        # Check if we have a valid token in database
         self.cur.execute("""
             SELECT access_token, token_expires_at, refresh_token,
                    client_id, client_secret
@@ -117,13 +129,11 @@ class TokenManager:
         print(f"⟳ Token expired for {self.region_code}, refreshing...")
 
         if refresh_token:
-            # Try to refresh
             try:
                 return self._refresh_token(refresh_token)
             except Exception as e:
                 print(f"⚠ Refresh failed: {e}, generating new tokens...")
 
-        # Generate new tokens
         return self._generate_new_tokens(client_id, client_secret)
 
     def _refresh_token(self, refresh_token: str) -> str:
@@ -157,6 +167,10 @@ class TokenManager:
             )
 
         tokens = response.json()
+        
+        # Parse expires_in from response, default to 24 hours if not provided
+        expires_in = tokens.get('expires_in', 86400)
+        token_expires_at = datetime.now() + timedelta(seconds=expires_in)
 
         # Update database
         self.cur.execute("""
@@ -171,7 +185,7 @@ class TokenManager:
         """, (
             tokens['access_token'],
             tokens['refresh_token'],
-            datetime.now() + timedelta(hours=24),
+            token_expires_at,
             self.region_code
         ))
         self.conn.commit()
@@ -224,6 +238,10 @@ class TokenManager:
             raise Exception(error_msg)
 
         tokens = response.json()
+        
+        # Parse expires_in from response, default to 24 hours if not provided
+        expires_in = tokens.get('expires_in', 86400)
+        token_expires_at = datetime.now() + timedelta(seconds=expires_in)
 
         # Update database
         self.cur.execute("""
@@ -239,7 +257,7 @@ class TokenManager:
         """, (
             tokens['access_token'],
             tokens['refresh_token'],
-            datetime.now() + timedelta(hours=24),
+            token_expires_at,
             self.region_code
         ))
         self.conn.commit()
@@ -247,12 +265,19 @@ class TokenManager:
         print(f"✓ New tokens generated for {self.region_code}")
         return tokens['access_token']
 
+    def close(self):
+        """Explicitly close database connection if we own it"""
+        if self._owns_connection:
+            if self.cur:
+                self.cur.close()
+                self.cur = None
+            if self.conn:
+                self.conn.close()
+                self.conn = None
+
     def __del__(self):
-        """Clean up database connection"""
-        if self.cur:
-            self.cur.close()
-        if self.conn:
-            self.conn.close()
+        """Clean up database connection only if we created it"""
+        self.close()
 
 
 # Convenience function for quick token retrieval
@@ -267,11 +292,12 @@ def get_token(region_code: str) -> str:
         str: Valid access token
     """
     manager = TokenManager(region_code)
-    return manager.get_valid_token()
+    token = manager.get_valid_token()
+    manager.close()
+    return token
 
 
 if __name__ == "__main__":
-    # Test token manager
     import sys
 
     if len(sys.argv) < 2:

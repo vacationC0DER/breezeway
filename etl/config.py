@@ -2,68 +2,57 @@
 Configuration module for Breezeway ETL Framework - V3
 Centralized configuration for all regions and entity types
 Updated with improved table naming conventions
+
+SECURITY NOTE: API credentials (client_id, client_secret) are stored in
+the database table breezeway.api_tokens, NOT in this config file.
 """
 
 # ============================================================================
 # REGION CONFIGURATIONS
 # ============================================================================
+# NOTE: Credentials removed for security. They are stored in breezeway.api_tokens table.
+# Only non-sensitive metadata is stored here.
 
 REGIONS = {
     'nashville': {
         'name': 'Nashville',
         'company_id': 8558,
-        'breezeway_company_id': '8558',
-        'client_id': 'qe1o2a524r9o9e0trtebfnzpa7uwqucx',
-        'client_secret': '0ql63kbubut6bm7l6mi5qefjctpiyn2q'
+        'breezeway_company_id': '8558'
     },
     'austin': {
         'name': 'Austin',
         'company_id': 8561,
-        'breezeway_company_id': '8561',
-        'client_id': 'djjj6choxfhl5155jiydsk1armvevsw6',
-        'client_secret': 'jvw9sh8466w3131wy6unawyt92pvr9wp'
+        'breezeway_company_id': '8561'
     },
     'smoky': {
         'name': 'Smoky Mountains',
         'company_id': 8399,
-        'breezeway_company_id': '8399',
-        'client_id': 'nh7ofae9o8f7okn1s60ti1vg58300jjh',
-        'client_secret': 'fdr2gislvj7v87xhcfrk3so7lo3yv3s8'
+        'breezeway_company_id': '8399'
     },
     'hilton_head': {
         'name': 'Hilton Head',
         'company_id': 12314,
-        'breezeway_company_id': '12314',
-        'client_id': 'flezehkxv3066hfwiumbkzixpwgfsnae',
-        'client_secret': '8xwj46lgthwfu2uvn9rywabvxs0ln1e4'
+        'breezeway_company_id': '12314'
     },
     'breckenridge': {
         'name': 'Breckenridge',
         'company_id': 10530,
-        'breezeway_company_id': '10530',
-        'client_id': 'ihf2zhveusojbaokzvc5uawliagzx5s4',
-        'client_secret': '0bnl0v5wzemyf89oojyobt0d78emyx0z'
+        'breezeway_company_id': '10530'
     },
     'sea_ranch': {
         'name': 'Sea Ranch',
         'company_id': 14717,
-        'breezeway_company_id': '14717',
-        'client_id': '5j9yelwgpzk2ug6i4zxmypngg8m18enx',
-        'client_secret': 'ix3gm16d0h95pm19sh1s3gmjnk3pa6a6'
+        'breezeway_company_id': '14717'
     },
     'mammoth': {
         'name': 'Mammoth',
         'company_id': 14720,
-        'breezeway_company_id': '14720',
-        'client_id': 'wwx7ntu758g8756c0o2liv8r1htk42ak',
-        'client_secret': 'qsthrkvonhttbr2sgrss4vwmd34f5g15'
+        'breezeway_company_id': '14720'
     },
     'hill_country': {
         'name': 'Hill Country',
         'company_id': 8559,
-        'breezeway_company_id': '8559',
-        'client_id': 'kcxxpq9js3f0dyjp6nin9wm4aq77j72n',
-        'client_secret': 'ua10myrj9nq6mvtosbm3xpjk3pxghhv6'
+        'breezeway_company_id': '8559'
     }
 }
 
@@ -75,22 +64,21 @@ ENTITY_CONFIGS = {
     'properties': {
         'endpoint': '/property',
         'api_id_field': 'id',
-        'table_name': 'properties',  # Updated: was breezeaway_properties_gw
+        'table_name': 'properties',
         'natural_key': ['property_id', 'region_code'],
-        'supports_incremental': False,  # API doesn't filter reliably yet
-        'filter_by_company': True,  # Filter by company_id from api_tokens
-        'filter_by_status': None,  # API doesn't support status param - filter in transformation instead
-        'transform_filter_status': 'active',  # Filter during transform: None (all), 'active', or 'inactive'
+        'supports_incremental': False,
+        'filter_by_company': True,
+        'filter_by_status': None,
+        'transform_filter_status': 'active',
         'child_tables': {
             'photos': {
-                'table_name': 'property_photos',  # Updated: was breezeaway_properties_gw_photos
+                'table_name': 'property_photos',
                 'api_field': 'photos',
                 'parent_fk': 'property_pk',
                 'natural_key': ['photo_id', 'property_pk']
             }
         },
         'fields_mapping': {
-            # API field → Database column
             'id': 'property_id',
             'company_id': 'company_id',
             'name': 'property_name',
@@ -130,13 +118,13 @@ ENTITY_CONFIGS = {
     'reservations': {
         'endpoint': '/reservation',
         'api_id_field': 'id',
-        'table_name': 'reservations',  # Updated: was breezeaway_reservations_gw
+        'table_name': 'reservations',
         'natural_key': ['reservation_id', 'region_code'],
         'supports_incremental': False,
         'parent_fk': 'property_id',
         'child_tables': {
             'guests': {
-                'table_name': 'reservation_guests',  # Updated: was breezeaway_reservation_gw_guests
+                'table_name': 'reservation_guests',
                 'api_field': 'guests',
                 'parent_fk': 'reservation_pk',
                 'natural_key': ['reservation_pk', 'guest_name', 'guest_email']
@@ -168,39 +156,39 @@ ENTITY_CONFIGS = {
     'tasks': {
         'endpoint': '/task',
         'api_id_field': 'id',
-        'table_name': 'tasks',  # Updated: was breezeaway_tasks_gw
+        'table_name': 'tasks',
         'natural_key': ['task_id', 'region_code'],
         'supports_incremental': False,
         'parent_fk': 'home_id',
-        'requires_property_filter': True,  # Tasks require home_id parameter
+        'requires_property_filter': True,
         'child_tables': {
             'assignments': {
-                'table_name': 'task_assignments',  # Updated: was breezeaway_tasks_gw_assignments
+                'table_name': 'task_assignments',
                 'api_field': 'assignments',
                 'parent_fk': 'task_pk',
                 'natural_key': ['task_pk', 'assignee_id']
             },
             'photos': {
-                'table_name': 'task_photos',  # Updated: was breezeaway_tasks_gw_photos
+                'table_name': 'task_photos',
                 'api_field': 'photos',
                 'parent_fk': 'task_pk',
                 'natural_key': ['task_pk', 'photo_id']
             },
             'comments': {
                 'table_name': 'task_comments',
-                'requires_api_call': True,  # Needs separate API call per task
+                'requires_api_call': True,
                 'endpoint_template': '/task/{task_id}/comments',
                 'parent_fk': 'task_pk',
-                'parent_id_field': 'task_id',  # Field in parent to use for API call
-                'natural_key': ['comment_id', 'region_code']  # Matches DB constraint uq_task_comment_natural_key
+                'parent_id_field': 'task_id',
+                'natural_key': ['comment_id', 'region_code']
             },
             'requirements': {
                 'table_name': 'task_requirements',
-                'requires_api_call': True,  # Needs separate API call per task
+                'requires_api_call': True,
                 'endpoint_template': '/task/{task_id}/requirements',
                 'parent_fk': 'task_pk',
                 'parent_id_field': 'task_id',
-                'natural_key': ['task_pk', 'requirement_id'],  # FIXED: Added natural key for UPSERT
+                'natural_key': ['task_pk', 'requirement_id'],
                 'fields_mapping': {
                     'id': 'requirement_id',
                     'section_name': 'section_name',
@@ -217,7 +205,7 @@ ENTITY_CONFIGS = {
                 'table_name': 'task_tags',
                 'api_field': 'task_tags',
                 'parent_fk': 'task_pk',
-                'natural_key': ['task_pk', 'tag_pk']  # Matches DB constraint; tag_id resolved to tag_pk in ETL
+                'natural_key': ['task_pk', 'tag_pk']
             },
             'supplies': {
                 'table_name': 'task_supplies',
@@ -274,23 +262,21 @@ ENTITY_CONFIGS = {
             'created_at': 'created_at',
             'finished_at': 'finished_at',
             'started_at': 'started_at',
-            'template_id': 'template_task_id',  # FIXED: API field is template_id not template_task_id
+            'template_id': 'template_task_id',
             'type_department': 'type_department',
             'type_priority': 'type_priority',
             'scheduled_date': 'scheduled_date',
             'scheduled_time': 'scheduled_time',
-            'checkin_date': 'checkin_date',  # For linking to reservations
-            'checkout_date': 'checkout_date',  # For linking to reservations
+            'checkin_date': 'checkin_date',
+            'checkout_date': 'checkout_date',
             'report_url': 'report_url',
             'reference_property_id': 'reference_property_id',
-            # NEW: Financial fields
             'total_cost': 'total_cost',
             'total_time': 'total_time',
             'estimated_time': 'estimated_time',
             'estimated_rate': 'estimated_rate',
             'billable': 'billable',
             'itemized_cost': 'itemized_cost',
-            # NEW: Task hierarchy
             'task_series_id': 'task_series_id',
             'parent_task_id': 'parent_task_id'
         },
@@ -413,8 +399,8 @@ API_CONFIG = {
 # ============================================================================
 
 DATABASE_CONFIG = {
-    'schema': 'breezeway',  # Updated: was api_integrations
-    'batch_size': 500,  # Records per batch for UPSERT
+    'schema': 'breezeway',
+    'batch_size': 500,
     'use_transactions': True
 }
 

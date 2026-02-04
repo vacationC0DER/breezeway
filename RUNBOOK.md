@@ -29,7 +29,7 @@
 tail -50 /root/Breezeway/logs/alerts.log
 
 # 3. Check recent sync status
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "
+psql -h localhost -U breezeway -d breezeway -c "
 SELECT region_code, entity_type, sync_status,
        last_successful_sync_at,
        EXTRACT(HOUR FROM (NOW() - last_successful_sync_at)) as hours_ago
@@ -40,7 +40,7 @@ ORDER BY sync_started_at DESC;
 "
 
 # 4. Quick validation - check record counts
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "
+psql -h localhost -U breezeway -d breezeway -c "
 SELECT 'properties' as entity, COUNT(*) as count FROM breezeway.properties
 UNION ALL
 SELECT 'reservations', COUNT(*) FROM breezeway.reservations
@@ -59,7 +59,7 @@ SELECT 'tasks', COUNT(*) FROM breezeway.tasks;
 
 ```bash
 # 1. Review sync performance trends
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "
+psql -h localhost -U breezeway -d breezeway -c "
 SELECT region_code, entity_type,
        AVG(api_calls_made) as avg_api_calls,
        AVG(records_processed) as avg_records,
@@ -75,7 +75,7 @@ ORDER BY region_code, entity_type;
 du -h /root/Breezeway/logs/
 
 # 3. Check token status
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "
+psql -h localhost -U breezeway -d breezeway -c "
 SELECT region_code,
        last_refreshed_at,
        token_generation_count,
@@ -112,10 +112,10 @@ tail -200 /root/Breezeway/logs/hourly_etl_$(date +%Y%m%d).log | grep -A 10 "FAIL
 **Resolution:**
 ```bash
 # 1. Check database connectivity
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "SELECT 1;"
+psql -h localhost -U breezeway -d breezeway -c "SELECT 1;"
 
 # 2. Check active connections
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "
+psql -h localhost -U breezeway -d breezeway -c "
 SELECT COUNT(*), state
 FROM pg_stat_activity
 WHERE datname = 'breezeway'
@@ -127,7 +127,7 @@ sleep 300
 python3 /root/Breezeway/etl/run_etl.py {region} {entity}
 
 # 4. If still failing, check firewall/network
-ping 159.89.235.26
+ping localhost
 ```
 
 #### B. API Connection Error
@@ -163,14 +163,14 @@ python3 /root/Breezeway/etl/run_etl.py {region} {entity}
 **Resolution:**
 ```bash
 # 1. Check token in database
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "
+psql -h localhost -U breezeway -d breezeway -c "
 SELECT region_code, token_expires_at, last_error
 FROM breezeway.api_tokens
 WHERE region_code = '{region}';
 "
 
 # 2. Force token refresh
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "
+psql -h localhost -U breezeway -d breezeway -c "
 UPDATE breezeway.api_tokens
 SET access_token = NULL,
     refresh_token = NULL,
@@ -200,7 +200,7 @@ nano /root/Breezeway/etl/config.py
 tail -50 /root/Breezeway/logs/hourly_etl_$(date +%Y%m%d).log
 
 # 2. For FK violations, check parent record exists:
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "
+psql -h localhost -U breezeway -d breezeway -c "
 SELECT COUNT(*)
 FROM breezeway.properties
 WHERE region_code = '{region}';
@@ -226,7 +226,7 @@ python3 /root/Breezeway/etl/run_etl.py {region} tasks
 
 2. **Check ETL duration:**
 ```bash
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "
+psql -h localhost -U breezeway -d breezeway -c "
 SELECT region_code, entity_type,
        sync_started_at,
        sync_completed_at,
@@ -278,7 +278,7 @@ WHERE sync_status = 'running'
 ps aux | grep run_etl.py
 
 # 2. If no process found, mark as failed manually:
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "
+psql -h localhost -U breezeway -d breezeway -c "
 UPDATE breezeway.etl_sync_log
 SET sync_status = 'failed',
     sync_completed_at = NOW(),
@@ -298,7 +298,7 @@ python3 /root/Breezeway/etl/run_etl.py {region} {entity}
 **Resolution:**
 ```bash
 # 1. Check when last successful sync occurred
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "
+psql -h localhost -U breezeway -d breezeway -c "
 SELECT region_code, entity_type,
        last_successful_sync_at,
        records_processed
@@ -310,7 +310,7 @@ LIMIT 1;
 "
 
 # 2. Check if records exist in database
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "
+psql -h localhost -U breezeway -d breezeway -c "
 SELECT COUNT(*)
 FROM breezeway.{entity}
 WHERE region_code = '{region}'
@@ -378,7 +378,7 @@ done
 
 ```bash
 # ⚠️ USE WITH CAUTION - Only clear completed/failed, never "running"
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "
+psql -h localhost -U breezeway -d breezeway -c "
 DELETE FROM breezeway.etl_sync_log
 WHERE sync_status IN ('success', 'failed')
   AND sync_started_at < NOW() - INTERVAL '7 days';
@@ -450,7 +450,7 @@ tail -500 /root/Breezeway/logs/hourly_etl_$(date +%Y%m%d).log > /tmp/etl_error_$
 tail -500 /root/Breezeway/logs/daily_etl_$(date +%Y%m%d).log >> /tmp/etl_error_$(date +%Y%m%d_%H%M).txt
 
 # 2. Collect sync status
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "
+psql -h localhost -U breezeway -d breezeway -c "
 COPY (
     SELECT *
     FROM breezeway.etl_sync_log

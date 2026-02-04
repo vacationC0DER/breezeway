@@ -210,7 +210,7 @@ cd /root/Breezeway/logs
 tail -200 hourly_etl_$(date +%Y%m%d).log | grep -A 5 "FAILED"
 
 Review failed syncs:
-psql -h 159.89.235.26 -U breezeway -d breezeway -c "
+psql -h localhost -U breezeway -d breezeway -c "
 SELECT region_code, entity_type, error_message, sync_started_at
 FROM breezeway.etl_sync_log
 WHERE sync_status='failed'

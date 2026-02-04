@@ -54,7 +54,7 @@ nano .env
 
 ```bash
 # Database connection
-HOST=159.89.235.26
+HOST=localhost
 PORT=5432
 USER=breezeway
 PASSWORD=breezeway2025user

@@ -14,6 +14,7 @@ from typing import List, Dict, Optional, Any, Tuple
 from datetime import datetime
 import logging
 import time
+import json
 
 from auth_manager import TokenManager
 from sync_tracker import SyncTracker
@@ -23,6 +24,71 @@ from etl.config import (
     API_CONFIG,
     DATABASE_CONFIG
 )
+
+
+def api_request_with_retry(url: str, headers: dict, timeout: int = None,
+                           max_retries: int = None, retry_delay: int = None) -> requests.Response:
+    """
+    Make an API request with retry logic and exponential backoff.
+
+    Args:
+        url: The URL to request
+        headers: Request headers
+        timeout: Request timeout in seconds
+        max_retries: Maximum number of retry attempts
+        retry_delay: Base delay between retries in seconds
+
+    Returns:
+        Response object
+
+    Raises:
+        requests.exceptions.RequestException: If all retries fail
+    """
+    timeout = timeout or API_CONFIG['timeout']
+    max_retries = max_retries or API_CONFIG['max_retries']
+    retry_delay = retry_delay or API_CONFIG['retry_delay']
+
+    last_exception = None
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=timeout)
+
+            # Handle rate limiting
+            if response.status_code == 429:
+                retry_after = int(response.headers.get('Retry-After', retry_delay * (2 ** attempt)))
+                logging.warning(f"Rate limited (429), waiting {retry_after}s before retry {attempt + 1}/{max_retries}")
+                time.sleep(retry_after)
+                continue
+
+            # Handle server errors with retry
+            if response.status_code >= 500:
+                wait_time = retry_delay * (2 ** attempt)
+                logging.warning(f"Server error ({response.status_code}), waiting {wait_time}s before retry {attempt + 1}/{max_retries}")
+                time.sleep(wait_time)
+                continue
+
+            response.raise_for_status()
+            return response
+
+        except requests.exceptions.Timeout as e:
+            last_exception = e
+            wait_time = retry_delay * (2 ** attempt)
+            logging.warning(f"Request timeout, waiting {wait_time}s before retry {attempt + 1}/{max_retries}")
+            time.sleep(wait_time)
+
+        except requests.exceptions.ConnectionError as e:
+            last_exception = e
+            wait_time = retry_delay * (2 ** attempt)
+            logging.warning(f"Connection error, waiting {wait_time}s before retry {attempt + 1}/{max_retries}")
+            time.sleep(wait_time)
+
+        except requests.exceptions.RequestException:
+            # For other errors, don't retry
+            raise
+
+    # All retries exhausted
+    raise last_exception or requests.exceptions.RequestException(f"All {max_retries} retries failed for {url}")
 
 
 class BreezewayETL:
@@ -56,9 +122,9 @@ class BreezewayETL:
         self.region_config = get_region_config(region_code)
         self.entity_config = get_entity_config(entity_type)
 
-        # Initialize managers
-        self.token_mgr = TokenManager(region_code)
-        self.tracker = SyncTracker(region_code, entity_type)
+        # Initialize managers with shared connection
+        self.token_mgr = TokenManager(region_code, db_conn=db_conn)
+        self.tracker = SyncTracker(region_code, entity_type, db_conn=db_conn)
 
         # Setup logging
         self.logger = logging.getLogger(f"ETL.{region_code}.{entity_type}")
@@ -145,8 +211,7 @@ class BreezewayETL:
             self.logger.debug(f"Fetching page {page}: {url}")
 
             try:
-                response = requests.get(url, headers=headers, timeout=API_CONFIG['timeout'])
-                response.raise_for_status()
+                response = api_request_with_retry(url, headers)
 
                 self.stats['api_calls'] += 1
                 self.tracker.increment_api_calls()
@@ -207,23 +272,34 @@ class BreezewayETL:
             home_id = prop['property_id']
             ref_prop_id = prop['reference_external_property_id'] or ''
 
-            # Fetch tasks for this property
-            url = f"{API_CONFIG['base_url']}/task?limit=100&page=1&home_id={home_id}&reference_property_id={ref_prop_id}"
+            # Paginate through tasks for this property
+            page = 1
+            while True:
+                url = f"{API_CONFIG['base_url']}/task?limit={API_CONFIG['page_size']}&page={page}&home_id={home_id}&reference_property_id={ref_prop_id}"
 
-            try:
-                response = requests.get(url, headers=headers, timeout=API_CONFIG['timeout'])
-                response.raise_for_status()
+                try:
+                    response = api_request_with_retry(url, headers)
 
-                self.stats['api_calls'] += 1
-                self.tracker.increment_api_calls()
+                    self.stats['api_calls'] += 1
+                    self.tracker.increment_api_calls()
 
-                data = response.json()
-                tasks = data.get('results', [])
-                all_tasks.extend(tasks)
+                    data = response.json()
+                    tasks = data.get('results', [])
 
-            except requests.exceptions.RequestException as e:
-                self.logger.warning(f"Failed to fetch tasks for property {home_id}: {e}")
-                continue
+                    if not tasks:
+                        break
+
+                    all_tasks.extend(tasks)
+
+                    # If we got fewer than page_size, no more pages
+                    if len(tasks) < API_CONFIG['page_size']:
+                        break
+
+                    page += 1
+
+                except requests.exceptions.RequestException as e:
+                    self.logger.warning(f"Failed to fetch tasks for property {home_id} page {page}: {e}")
+                    break
 
         return all_tasks
 
@@ -417,7 +493,6 @@ class BreezewayETL:
 
             # For requirements
             elif child_name == 'requirements':
-                import json
                 transformed_child.update({
                     'requirement_id': str(child.get('id', '')),
                     'section_name': child.get('section_name'),
@@ -438,6 +513,39 @@ class BreezewayETL:
                     transformed_child.update({
                         'tag_id': tag_id  # Will be resolved to tag_pk during load
                     })
+
+            # For supplies (task supplies usage)
+            elif child_name == 'supplies':
+                fields_mapping = child_config.get('fields_mapping', {})
+                for api_field_name, db_column in fields_mapping.items():
+                    value = child.get(api_field_name)
+                    # Convert numeric fields
+                    if db_column in ['quantity', 'unit_cost', 'total_price', 'markup_rate']:
+                        try:
+                            value = float(value) if value is not None else None
+                        except (ValueError, TypeError):
+                            value = None
+                    transformed_child[db_column] = value
+
+            # For costs (task costs)
+            elif child_name == 'costs':
+                fields_mapping = child_config.get('fields_mapping', {})
+                for api_field_name, db_column in fields_mapping.items():
+                    value = child.get(api_field_name)
+                    # Convert numeric fields
+                    if db_column == 'cost':
+                        try:
+                            value = float(value) if value is not None else None
+                        except (ValueError, TypeError):
+                            value = None
+                    transformed_child[db_column] = value
+
+                # Handle nested type_cost
+                nested_fields = child_config.get('nested_fields', {})
+                if 'type_cost' in nested_fields:
+                    type_cost = child.get('type_cost', {}) or {}
+                    for nested_field, db_column in nested_fields['type_cost'].items():
+                        transformed_child[db_column] = type_cost.get(nested_field)
 
             # Store parent natural key for later FK resolution
             api_id_field = self.entity_config['api_id_field']
@@ -500,9 +608,8 @@ class BreezewayETL:
                     # Build full URL
                     url = f"{API_CONFIG['base_url']}{endpoint}"
 
-                    # Fetch from API
-                    response = requests.get(url, headers=headers, timeout=API_CONFIG['timeout'])
-                    response.raise_for_status()
+                    # Fetch from API with retry
+                    response = api_request_with_retry(url, headers)
 
                     self.stats['api_calls'] += 1
                     self.tracker.increment_api_calls()
@@ -544,7 +651,6 @@ class BreezewayETL:
                                     value = child.get(api_field)
                                     # Convert to JSON for complex fields
                                     if api_field in ['action', 'photos'] and value is not None:
-                                        import json
                                         value = json.dumps(value) if value else None
                                     transformed_child[db_column] = value
                             else:
