@@ -535,7 +535,7 @@ WITH NO DATA;
 CREATE MATERIALIZED VIEW breezeway.mv_reservation_turnaround_analysis AS
 SELECT
     r.region_code,
-    DATE_TRUNC('week', r.checkout_date)::date as week_of,
+    time_bucket('1 week', r.checkout_date)::date as week_of,
 
     -- Reservation Volume
     COUNT(DISTINCT r.id) as reservations,
@@ -559,7 +559,7 @@ FROM breezeway.reservations r
 LEFT JOIN breezeway.tasks t ON t.reservation_pk = r.id
 WHERE r.reservation_status = 'active'
   AND r.checkout_date >= CURRENT_DATE - INTERVAL '90 days'
-GROUP BY r.region_code, DATE_TRUNC('week', r.checkout_date)
+GROUP BY r.region_code, time_bucket('1 week', r.checkout_date)
 ORDER BY r.region_code, week_of DESC
 WITH NO DATA;
 
@@ -570,7 +570,7 @@ WITH NO DATA;
 -- ============================================================================
 CREATE MATERIALIZED VIEW breezeway.mv_monthly_trend_analysis AS
 SELECT
-    DATE_TRUNC('month', created_at)::date as month,
+    time_bucket('1 month', created_at)::date as month,
     region_code,
     type_department,
 
@@ -594,12 +594,12 @@ SELECT
     COUNT(DISTINCT finished_by_id) as unique_workers,
 
     -- Month-over-Month Change (calculated in application layer)
-    LAG(COUNT(*)) OVER (PARTITION BY region_code, type_department ORDER BY DATE_TRUNC('month', created_at)) as prev_month_tasks,
+    LAG(COUNT(*)) OVER (PARTITION BY region_code, type_department ORDER BY time_bucket('1 month', created_at)) as prev_month_tasks,
 
     CURRENT_TIMESTAMP as refreshed_at
 FROM breezeway.tasks
 WHERE created_at >= CURRENT_DATE - INTERVAL '12 months'
-GROUP BY DATE_TRUNC('month', created_at), region_code, type_department
+GROUP BY time_bucket('1 month', created_at), region_code, type_department
 ORDER BY month DESC, region_code, type_department
 WITH NO DATA;
 
@@ -610,18 +610,18 @@ WITH NO DATA;
 -- ============================================================================
 CREATE MATERIALIZED VIEW breezeway.mv_weekly_operational_snapshot AS
 SELECT
-    DATE_TRUNC('week', CURRENT_DATE)::date as week_start,
+    time_bucket('1 week', CURRENT_DATE)::date as week_start,
     region_code,
 
     -- This Week's Volume
-    COUNT(CASE WHEN created_at >= DATE_TRUNC('week', CURRENT_DATE) THEN 1 END) as tasks_created_this_week,
-    COUNT(CASE WHEN finished_at >= DATE_TRUNC('week', CURRENT_DATE) THEN 1 END) as tasks_completed_this_week,
+    COUNT(CASE WHEN created_at >= time_bucket('1 week', CURRENT_DATE) THEN 1 END) as tasks_created_this_week,
+    COUNT(CASE WHEN finished_at >= time_bucket('1 week', CURRENT_DATE) THEN 1 END) as tasks_completed_this_week,
 
     -- Last Week's Volume (for comparison)
-    COUNT(CASE WHEN created_at >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'
-               AND created_at < DATE_TRUNC('week', CURRENT_DATE) THEN 1 END) as tasks_created_last_week,
-    COUNT(CASE WHEN finished_at >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'
-               AND finished_at < DATE_TRUNC('week', CURRENT_DATE) THEN 1 END) as tasks_completed_last_week,
+    COUNT(CASE WHEN created_at >= time_bucket('1 week', CURRENT_DATE) - INTERVAL '7 days'
+               AND created_at < time_bucket('1 week', CURRENT_DATE) THEN 1 END) as tasks_created_last_week,
+    COUNT(CASE WHEN finished_at >= time_bucket('1 week', CURRENT_DATE) - INTERVAL '7 days'
+               AND finished_at < time_bucket('1 week', CURRENT_DATE) THEN 1 END) as tasks_completed_last_week,
 
     -- Current Backlog
     COUNT(CASE WHEN task_status_stage IN ('new', 'in_progress') THEN 1 END) as current_backlog,
@@ -632,14 +632,14 @@ SELECT
 
     -- Department Breakdown This Week
     COUNT(CASE WHEN type_department = 'housekeeping'
-               AND created_at >= DATE_TRUNC('week', CURRENT_DATE) THEN 1 END) as housekeeping_this_week,
+               AND created_at >= time_bucket('1 week', CURRENT_DATE) THEN 1 END) as housekeeping_this_week,
     COUNT(CASE WHEN type_department = 'inspection'
-               AND created_at >= DATE_TRUNC('week', CURRENT_DATE) THEN 1 END) as inspection_this_week,
+               AND created_at >= time_bucket('1 week', CURRENT_DATE) THEN 1 END) as inspection_this_week,
     COUNT(CASE WHEN type_department = 'maintenance'
-               AND created_at >= DATE_TRUNC('week', CURRENT_DATE) THEN 1 END) as maintenance_this_week,
+               AND created_at >= time_bucket('1 week', CURRENT_DATE) THEN 1 END) as maintenance_this_week,
 
     -- Active Workers This Week
-    COUNT(DISTINCT CASE WHEN finished_at >= DATE_TRUNC('week', CURRENT_DATE)
+    COUNT(DISTINCT CASE WHEN finished_at >= time_bucket('1 week', CURRENT_DATE)
                         THEN finished_by_id END) as active_workers_this_week,
 
     CURRENT_TIMESTAMP as refreshed_at
@@ -830,12 +830,12 @@ CREATE MATERIALIZED VIEW breezeway.mv_regional_workload_distribution AS
 WITH daily_tasks AS (
     SELECT
         region_code,
-        DATE(created_at) as task_date,
+        time_bucket('1 day', created_at)::date as task_date,
         COUNT(*) as tasks_created,
         COUNT(CASE WHEN task_status_stage = 'finished' THEN 1 END) as tasks_completed
     FROM breezeway.tasks
     WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
-    GROUP BY region_code, DATE(created_at)
+    GROUP BY region_code, time_bucket('1 day', created_at)
 )
 SELECT
     region_code,
@@ -1225,6 +1225,10 @@ BEGIN
     REFRESH MATERIALIZED VIEW breezeway.mv_property_maintenance_burden;
     REFRESH MATERIALIZED VIEW breezeway.mv_data_quality_scorecard;
     REFRESH MATERIALIZED VIEW breezeway.mv_operational_alerts;
+
+    -- NOTE: Continuous aggregates are auto-refreshed by TimescaleDB policies:
+    --   breezeway.cagg_task_daily_metrics   (hourly, 3-day lookback)
+    --   breezeway.cagg_task_monthly_metrics  (hourly, 3-month lookback)
 
     RAISE NOTICE 'All dashboard views refreshed at %', CURRENT_TIMESTAMP;
 END;

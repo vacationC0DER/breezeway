@@ -736,16 +736,37 @@ class BreezewayETL:
         table_name = self.entity_config['table_name']
         natural_keys = self.entity_config['natural_key']
 
+        # For hypertables, the partition column must be in the conflict target
+        # to match the unique constraint (e.g. tasks: task_id, region_code, created_at)
+        conflict_keys = list(natural_keys)
+        partition_col = self.entity_config.get('hypertable_partition_column')
+        if partition_col and partition_col not in conflict_keys:
+            conflict_keys.append(partition_col)
+
         # Get columns (excluding internal fields)
         columns = [k for k in records[0].keys() if not k.startswith('_')]
 
         # Build conflict target
-        conflict_target = ', '.join(natural_keys)
+        conflict_target = ', '.join(conflict_keys)
 
-        # Build update clause (all columns except natural keys and created_at)
+        # Warn about records that would hit compressed chunks (>90 days old)
+        if partition_col and partition_col in columns:
+            from datetime import timedelta
+            compression_threshold = datetime.now() - timedelta(days=90)
+            old_count = sum(
+                1 for r in records
+                if r.get(partition_col) and r[partition_col] < compression_threshold
+            )
+            if old_count > 0:
+                self.logger.warning(
+                    f"{old_count} records have {partition_col} older than 90 days "
+                    f"and may fail UPSERT against compressed hypertable chunks"
+                )
+
+        # Build update clause (all columns except conflict keys)
         update_columns = [
             c for c in columns
-            if c not in natural_keys and c != 'created_at'
+            if c not in conflict_keys and c != 'created_at'
         ]
         update_clause = ', '.join([
             f"{col} = EXCLUDED.{col}"

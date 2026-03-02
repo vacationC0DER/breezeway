@@ -158,6 +158,7 @@ ENTITY_CONFIGS = {
         'api_id_field': 'id',
         'table_name': 'tasks',
         'natural_key': ['task_id', 'region_code'],
+        'hypertable_partition_column': 'created_at',  # included in UPSERT conflict target after migration 027
         'supports_incremental': False,
         'parent_fk': 'home_id',
         'requires_property_filter': True,

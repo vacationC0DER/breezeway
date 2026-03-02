@@ -99,6 +99,8 @@ class SyncTracker:
 
     def start(self):
         """Mark sync as started"""
+        self._sync_started_at = datetime.now()
+
         self.cur.execute("""
             INSERT INTO breezeway.etl_sync_log
                 (region_code, entity_type, sync_status, sync_started_at)
@@ -147,6 +149,8 @@ class SyncTracker:
 
     def complete(self):
         """Mark sync as successfully completed"""
+        duration = self._calculate_duration()
+
         self.cur.execute("""
             UPDATE breezeway.etl_sync_log SET
                 sync_completed_at = CURRENT_TIMESTAMP,
@@ -169,6 +173,8 @@ class SyncTracker:
             self.region_code,
             self.entity_type
         ))
+
+        self._write_history('success', duration=duration)
         self.conn.commit()
 
         print(f"✓ Sync completed: {self.region_code} / {self.entity_type}")
@@ -178,6 +184,8 @@ class SyncTracker:
 
     def fail(self, error_message: str):
         """Mark sync as failed with error message"""
+        duration = self._calculate_duration()
+
         self.cur.execute("""
             UPDATE breezeway.etl_sync_log SET
                 sync_completed_at = CURRENT_TIMESTAMP,
@@ -201,10 +209,59 @@ class SyncTracker:
             self.region_code,
             self.entity_type
         ))
+
+        self._write_history('failed', duration=duration, error_message=error_message)
         self.conn.commit()
 
         print(f"✗ Sync failed: {self.region_code} / {self.entity_type}")
         print(f"  Error: {error_message}")
+
+    def _calculate_duration(self) -> Optional[float]:
+        """Calculate sync duration in seconds from start time"""
+        if hasattr(self, '_sync_started_at') and self._sync_started_at:
+            return round((datetime.now() - self._sync_started_at).total_seconds(), 2)
+        return None
+
+    def _write_history(self, status: str, duration: Optional[float] = None,
+                       error_message: Optional[str] = None):
+        """Append a row to etl_sync_history (TimescaleDB hypertable).
+
+        This is best-effort: if the table doesn't exist yet (migration 025
+        hasn't been applied), the INSERT is silently skipped so existing
+        ETL runs are not disrupted. Uses a SAVEPOINT so that a failed INSERT
+        doesn't abort the surrounding transaction.
+        """
+        try:
+            self.cur.execute("SAVEPOINT sync_history_write")
+            self.cur.execute("""
+                INSERT INTO breezeway.etl_sync_history
+                    (region_code, entity_type, sync_status, sync_started_at,
+                     sync_completed_at, records_processed, records_new,
+                     records_updated, records_deleted, api_calls_made,
+                     error_message, duration_seconds)
+                VALUES
+                    (%s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                self.region_code,
+                self.entity_type,
+                status,
+                self._sync_started_at if hasattr(self, '_sync_started_at') else datetime.now(),
+                self.stats['processed'],
+                self.stats['new'],
+                self.stats['updated'],
+                self.stats['deleted'],
+                self.stats['api_calls'],
+                error_message,
+                duration
+            ))
+            self.cur.execute("RELEASE SAVEPOINT sync_history_write")
+        except Exception:
+            # Table may not exist yet (pre-migration 025); rollback to
+            # savepoint so the surrounding transaction remains valid
+            try:
+                self.cur.execute("ROLLBACK TO SAVEPOINT sync_history_write")
+            except Exception:
+                pass
 
     def close(self):
         """Explicitly close database connection if we own it"""
