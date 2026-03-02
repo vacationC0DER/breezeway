@@ -31,13 +31,19 @@
 -- and _upsert_children() in etl/etl_base.py.
 -- ============================================================================
 
+-- Inbound FKs: child tables → tasks (blocks hypertable conversion)
 ALTER TABLE breezeway.task_assignments DROP CONSTRAINT IF EXISTS fk_assignment_task;
 ALTER TABLE breezeway.task_photos DROP CONSTRAINT IF EXISTS fk_task_photo_task;
 ALTER TABLE breezeway.task_comments DROP CONSTRAINT IF EXISTS fk_comment_task;
 ALTER TABLE breezeway.task_requirements DROP CONSTRAINT IF EXISTS fk_requirement_task;
 ALTER TABLE breezeway.task_tags DROP CONSTRAINT IF EXISTS fk_task_tags_task;
-ALTER TABLE breezeway.task_supplies DROP CONSTRAINT IF EXISTS fk_task_supply_task;
-ALTER TABLE breezeway.task_costs DROP CONSTRAINT IF EXISTS fk_task_cost_task;
+ALTER TABLE breezeway.task_supplies DROP CONSTRAINT IF EXISTS task_supplies_task_pk_fkey;
+ALTER TABLE breezeway.task_costs DROP CONSTRAINT IF EXISTS task_costs_task_pk_fkey;
+
+-- Outbound FKs: tasks → parent tables (must drop for hypertable conversion)
+ALTER TABLE breezeway.tasks DROP CONSTRAINT IF EXISTS fk_task_property;
+ALTER TABLE breezeway.tasks DROP CONSTRAINT IF EXISTS fk_task_region;
+ALTER TABLE breezeway.tasks DROP CONSTRAINT IF EXISTS fk_task_reservation;
 
 
 -- ============================================================================
@@ -46,12 +52,16 @@ ALTER TABLE breezeway.task_costs DROP CONSTRAINT IF EXISTS fk_task_cost_task;
 -- constraints and primary keys.
 -- ============================================================================
 
--- Drop old unique constraint
-ALTER TABLE breezeway.tasks DROP CONSTRAINT IF EXISTS uq_tasks_natural_key;
+-- Drop old unique constraint (actual name from live DB: unique_task_region)
+ALTER TABLE breezeway.tasks DROP CONSTRAINT IF EXISTS unique_task_region;
 
 -- Add new constraint including the time partition column
-ALTER TABLE breezeway.tasks ADD CONSTRAINT uq_tasks_natural_key
+ALTER TABLE breezeway.tasks ADD CONSTRAINT unique_task_region
     UNIQUE (task_id, region_code, created_at);
+
+-- Fix primary key: TimescaleDB requires partition column in ALL unique indexes/PKs
+ALTER TABLE breezeway.tasks DROP CONSTRAINT IF EXISTS breezeaway_tasks_gw_pkey;
+ALTER TABLE breezeway.tasks ADD CONSTRAINT tasks_pkey PRIMARY KEY (id, created_at);
 
 
 -- ============================================================================
