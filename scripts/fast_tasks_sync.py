@@ -128,7 +128,7 @@ def load(records):
     seen = set()
     unique = []
     for r in records:
-        key = (r.get("task_id"), r.get("region_code"))
+        key = (r.get("task_id"), r.get("region_code"), r.get("created_at"))
         if key not in seen:
             seen.add(key)
             unique.append(r)
@@ -149,7 +149,7 @@ def load(records):
     table = f"{DATABASE_CONFIG['schema']}.tasks"
     
     cols_str = ", ".join(columns)
-    conflict = "task_id, region_code"
+    conflict = "task_id, region_code, created_at"  # must include hypertable partition column (migration 027)
     update = ", ".join([f"{c} = EXCLUDED.{c}" for c in columns if c not in ["task_id", "region_code", "created_at"]])
     
     query = f"INSERT INTO {table} ({cols_str}) VALUES %s ON CONFLICT ({conflict}) DO UPDATE SET {update}"
