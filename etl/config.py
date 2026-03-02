@@ -190,6 +190,7 @@ ENTITY_CONFIGS = {
                 'parent_fk': 'task_pk',
                 'parent_id_field': 'task_id',
                 'natural_key': ['task_pk', 'requirement_id'],
+                'hypertable_partition_column': 'created_at',
                 'fields_mapping': {
                     'id': 'requirement_id',
                     'section_name': 'section_name',

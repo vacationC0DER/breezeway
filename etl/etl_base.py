@@ -547,6 +547,11 @@ class BreezewayETL:
                     for nested_field, db_column in nested_fields['type_cost'].items():
                         transformed_child[db_column] = type_cost.get(nested_field)
 
+            # For hypertable children, copy parent's partition column
+            child_partition_col = child_config.get('hypertable_partition_column')
+            if child_partition_col and child_partition_col not in transformed_child:
+                transformed_child[child_partition_col] = parent_transformed.get(child_partition_col)
+
             # Store parent natural key for later FK resolution
             api_id_field = self.entity_config['api_id_field']
             transformed_child['_parent_api_id'] = str(parent_record.get(api_id_field, ''))
@@ -666,6 +671,11 @@ class BreezewayETL:
                                     'note': child.get('note'),
                                     'home_element_name': child.get('home_element_name')
                                 })
+
+                        # For hypertable children, copy parent's partition column
+                        child_partition_col = child_config.get('hypertable_partition_column')
+                        if child_partition_col and child_partition_col not in transformed_child:
+                            transformed_child[child_partition_col] = parent_record.get(child_partition_col)
 
                         # Store parent API ID for FK resolution
                         transformed_child['_parent_api_id'] = str(parent_id)
@@ -930,14 +940,20 @@ class BreezewayETL:
         # Get natural key for conflict detection
         natural_key = child_config.get('natural_key', [])
 
-        # Deduplicate records within batch based on natural key
+        # For hypertable child tables, include partition column in conflict target
+        conflict_natural_key = list(natural_key)
+        child_partition_col = child_config.get('hypertable_partition_column')
+        if child_partition_col and child_partition_col not in conflict_natural_key:
+            conflict_natural_key.append(child_partition_col)
+
+        # Deduplicate records within batch based on conflict key
         # This prevents "ON CONFLICT DO UPDATE cannot affect row a second time" error
-        if natural_key:
+        if conflict_natural_key:
             seen_keys = set()
             deduplicated_records = []
             duplicates_in_batch = 0
             for record in records:
-                key_tuple = tuple(record.get(k) for k in natural_key)
+                key_tuple = tuple(record.get(k) for k in conflict_natural_key)
                 if key_tuple not in seen_keys:
                     seen_keys.add(key_tuple)
                     deduplicated_records.append(record)
@@ -965,11 +981,11 @@ class BreezewayETL:
         # Apply UPSERT (ON CONFLICT) for all child tables with natural keys
         # This prevents duplicate key errors on re-sync and enables idempotent ETL
         if natural_key:
-            # Build conflict target from natural key
-            conflict_columns = ', '.join(natural_key)
+            # Build conflict target (includes partition column for hypertables)
+            conflict_columns = ', '.join(conflict_natural_key)
 
             # Build UPDATE clause to update all non-key columns
-            update_columns = [col for col in columns if col not in natural_key and col not in ['id', 'created_at']]
+            update_columns = [col for col in columns if col not in conflict_natural_key and col not in ['id']]
             if update_columns:
                 update_set = ', '.join([f"{col} = EXCLUDED.{col}" for col in update_columns])
                 query = f"""
