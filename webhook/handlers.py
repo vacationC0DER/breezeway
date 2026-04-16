@@ -111,9 +111,9 @@ def process_property_status_event(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "ok", "message": "Test event received"}
     
     # Extract key fields
-    company_id = payload.get("company_id")
+    company_id = payload.get("company_id")  # Usually absent in property-status
     property_id = str(payload.get("property_id", payload.get("id", "")))
-    event_action = payload.get("event", "property_status_changed")
+    event_action = payload.get("event_type", payload.get("event", "property_status_changed"))
     
     # Log the event
     event_id = log_webhook_event(
@@ -155,9 +155,10 @@ def process_task_event(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "ok", "message": "Test event received"}
     
     # Extract key fields
-    company_id = payload.get("company_id")
-    task_id = str(payload.get("task_id", payload.get("id", "")))
-    event_action = payload.get("event", "task_updated")
+    task_data = payload.get("task", {})
+    company_id = task_data.get("company_id") or payload.get("company_id")
+    task_id = str(task_data.get("id", payload.get("task_id", payload.get("id", ""))))
+    event_action = payload.get("event_type", payload.get("event", "task_updated"))
     
     # Log the event
     event_id = log_webhook_event(
@@ -181,16 +182,42 @@ def process_task_event(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"status": "ok", "event_id": event_id}
 
 
+def _resolve_region_from_property(property_id: str) -> str:
+    """Look up region_code from property_id in the database."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT region_code FROM {DB_SCHEMA}.properties
+                WHERE property_id = %s LIMIT 1
+            """, (property_id,))
+            row = cur.fetchone()
+            return row[0] if row else "unknown"
+    except Exception as e:
+        logger.warning(f"Failed to resolve region for property {property_id}: {e}")
+        return "unknown"
+    finally:
+        if conn is not None:
+            return_db_connection(conn)
+
+
 def update_property_from_webhook(payload: Dict[str, Any]):
     """Update property record from webhook payload"""
-    company_id = payload.get("company_id")
     property_id = str(payload.get("property_id", payload.get("id", "")))
-    region_code = get_region_by_company_id(company_id)
-    
+    company_id = payload.get("company_id")
+
+    # Resolve region: try company_id first, fall back to property_id DB lookup
+    region_code = "unknown"
+    if company_id:
+        region_code = get_region_by_company_id(int(company_id))
+    if region_code == "unknown" and property_id:
+        region_code = _resolve_region_from_property(property_id)
+
     if not property_id or region_code == "unknown":
-        logger.warning(f"Cannot update property: missing property_id or unknown company_id {company_id}")
+        logger.warning(f"Cannot update property: cannot resolve region for property {property_id}")
         return
-    
+
     # Extract status if present
     new_status = payload.get("status")
     if not new_status:
@@ -222,19 +249,25 @@ def update_property_from_webhook(payload: Dict[str, Any]):
 
 def update_task_from_webhook(payload: Dict[str, Any]):
     """Update task record from webhook payload"""
-    company_id = payload.get("company_id")
-    task_id = str(payload.get("task_id", payload.get("id", "")))
-    region_code = get_region_by_company_id(company_id)
-    
-    if not task_id or region_code == "unknown":
-        logger.warning(f"Cannot update task: missing task_id or unknown company_id {company_id}")
-        return
-    
-    # Get task data (might be nested under "task" key or at root)
     task_data = payload.get("task", payload)
-    
-    # Extract key fields to update
-    new_status = task_data.get("status")
+    company_id = task_data.get("company_id") or payload.get("company_id")
+    task_id = str(task_data.get("id", payload.get("task_id", "")))
+
+    if company_id:
+        region_code = get_region_by_company_id(int(company_id))
+    else:
+        region_code = "unknown"
+
+    if not task_id or region_code == "unknown":
+        logger.warning(f"Cannot update task: task_id={task_id} company_id={company_id}")
+        return
+
+    # Extract key fields — status is a nested object in Breezeway payloads
+    raw_status = task_data.get("status")
+    if isinstance(raw_status, dict):
+        new_status = raw_status.get("code") or raw_status.get("name")
+    else:
+        new_status = raw_status
     finished_at = task_data.get("finished_at")
     started_at = task_data.get("started_at")
     
