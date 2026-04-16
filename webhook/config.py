@@ -36,3 +36,21 @@ COMPANY_TO_REGION = {
 def get_region_by_company_id(company_id: int) -> str:
     """Get region code from company ID"""
     return COMPANY_TO_REGION.get(company_id, "unknown")
+
+
+# Thread-safe connection pool for webhook handlers
+# (ThreadedConnectionPool required because uvicorn uses threads for sync handlers)
+import logging
+from psycopg2 import pool as pg_pool
+
+_logger = logging.getLogger(__name__)
+
+try:
+    db_pool = pg_pool.ThreadedConnectionPool(
+        minconn=2,
+        maxconn=10,
+        dsn=DATABASE_URL
+    )
+except Exception as e:
+    _logger.error(f"Failed to initialize DB connection pool: {e}")
+    db_pool = None

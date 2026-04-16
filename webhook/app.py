@@ -13,8 +13,8 @@ from typing import Dict, Any
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 
-from .config import HOST, PORT
-from .handlers import process_property_status_event, process_task_event
+from .config import HOST, PORT, DB_SCHEMA
+from .handlers import process_property_status_event, process_task_event, get_db_connection, return_db_connection
 
 # Configure logging
 logging.basicConfig(
@@ -93,11 +93,9 @@ async def webhook_task(request: Request):
 @app.get("/webhook/events")
 async def list_recent_events(limit: int = 50):
     """List recent webhook events (for debugging/monitoring)"""
-    from .handlers import get_db_connection
-    from .config import DB_SCHEMA
-    
-    conn = get_db_connection()
+    conn = None
     try:
+        conn = get_db_connection()
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT id, event_id, webhook_type, region_code, entity_id, 
@@ -119,7 +117,8 @@ async def list_recent_events(limit: int = 50):
             
             return {"events": events, "count": len(events)}
     finally:
-        conn.close()
+        if conn is not None:
+            return_db_connection(conn)
 
 
 # Entry point for running directly

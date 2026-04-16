@@ -14,8 +14,20 @@ logger = logging.getLogger(__name__)
 
 
 def get_db_connection():
-    """Get database connection"""
-    return psycopg2.connect(DATABASE_URL)
+    """Get database connection from thread-safe pool"""
+    from .config import db_pool
+    if db_pool is None:
+        return psycopg2.connect(DATABASE_URL)
+    return db_pool.getconn()
+
+
+def return_db_connection(conn):
+    """Return connection to pool (or close if not pooled)"""
+    from .config import db_pool
+    if db_pool is not None:
+        db_pool.putconn(conn)
+    else:
+        conn.close()
 
 
 def log_webhook_event(
@@ -33,8 +45,9 @@ def log_webhook_event(
     """
     region_code = get_region_by_company_id(company_id) if company_id else None
     
-    conn = get_db_connection()
+    conn = None
     try:
+        conn = get_db_connection()
         with conn.cursor() as cur:
             cur.execute(f"""
                 INSERT INTO {DB_SCHEMA}.webhook_events 
@@ -55,13 +68,15 @@ def log_webhook_event(
             logger.info(f"Logged webhook event {event_id}: {webhook_type} for {region_code or 'unknown'}")
             return event_id
     finally:
-        conn.close()
+        if conn is not None:
+            return_db_connection(conn)
 
 
 def mark_event_processed(event_id: int, error_message: Optional[str] = None):
     """Mark event as processed (or failed)"""
-    conn = get_db_connection()
+    conn = None
     try:
+        conn = get_db_connection()
         with conn.cursor() as cur:
             cur.execute(f"""
                 UPDATE {DB_SCHEMA}.webhook_events
@@ -72,7 +87,8 @@ def mark_event_processed(event_id: int, error_message: Optional[str] = None):
             """, (datetime.now(), error_message, event_id))
             conn.commit()
     finally:
-        conn.close()
+        if conn is not None:
+            return_db_connection(conn)
 
 
 def process_property_status_event(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -181,8 +197,9 @@ def update_property_from_webhook(payload: Dict[str, Any]):
         logger.info(f"No status in payload for property {property_id}, skipping update")
         return
     
-    conn = get_db_connection()
+    conn = None
     try:
+        conn = get_db_connection()
         with conn.cursor() as cur:
             cur.execute(f"""
                 UPDATE {DB_SCHEMA}.properties
@@ -199,7 +216,8 @@ def update_property_from_webhook(payload: Dict[str, Any]):
             
             conn.commit()
     finally:
-        conn.close()
+        if conn is not None:
+            return_db_connection(conn)
 
 
 def update_task_from_webhook(payload: Dict[str, Any]):
@@ -220,8 +238,9 @@ def update_task_from_webhook(payload: Dict[str, Any]):
     finished_at = task_data.get("finished_at")
     started_at = task_data.get("started_at")
     
-    conn = get_db_connection()
+    conn = None
     try:
+        conn = get_db_connection()
         with conn.cursor() as cur:
             # Build dynamic update
             updates = ["synced_at = %s", "updated_at = CURRENT_TIMESTAMP"]
@@ -252,4 +271,5 @@ def update_task_from_webhook(payload: Dict[str, Any]):
             
             conn.commit()
     finally:
-        conn.close()
+        if conn is not None:
+            return_db_connection(conn)
