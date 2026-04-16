@@ -16,7 +16,7 @@ PORT = 8001
 # Database config
 DATABASE_URL = (
     f"postgresql://{envs.get('USER', 'breezeway')}:{envs.get('PASSWORD', '')}@"
-    f"{envs.get('HOST', 'localhost')}:{envs.get('PORT', '5432')}/{envs.get('DB', 'breezeway')}?sslmode=require"
+    f"{envs.get('HOST', 'localhost')}:{envs.get('PORT', '5432')}/{envs.get('DB', 'breezeway')}?sslmode=require&connect_timeout=10"
 )
 
 DB_SCHEMA = "breezeway"

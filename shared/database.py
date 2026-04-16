@@ -46,7 +46,7 @@ class DatabaseManager:
                 raise ValueError("Could not load .env file")
 
             url = (f"postgresql://{envs['USER']}:{envs['PASSWORD']}"
-                   f"@{envs['HOST']}:{envs['PORT']}/{envs['DB']}?sslmode=require")
+                   f"@{envs['HOST']}:{envs['PORT']}/{envs['DB']}?sslmode=require&connect_timeout=10")
 
             cls._connection_pool = pool.SimpleConnectionPool(
                 minconn,
@@ -70,7 +70,7 @@ class DatabaseManager:
                 raise ValueError("Could not load .env file")
 
             url = (f"postgresql://{envs['USER']}:{envs['PASSWORD']}"
-                   f"@{envs['HOST']}:{envs['PORT']}/{envs['DB']}?sslmode=require")
+                   f"@{envs['HOST']}:{envs['PORT']}/{envs['DB']}?sslmode=require&connect_timeout=10")
 
             cls._single_connection = psycopg2.connect(url)
 

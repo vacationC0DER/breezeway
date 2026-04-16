@@ -60,7 +60,7 @@ class TokenManager:
                 raise ValueError("Could not load .env file")
 
             url = (f"postgresql://{envs['USER']}:{envs['PASSWORD']}"
-                   f"@{envs['HOST']}:{envs['PORT']}/{envs['DB']}?sslmode=require")
+                   f"@{envs['HOST']}:{envs['PORT']}/{envs['DB']}?sslmode=require&connect_timeout=10")
 
             self.conn = psycopg2.connect(url)
             self.cur = self.conn.cursor()
