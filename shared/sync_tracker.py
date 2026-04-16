@@ -227,12 +227,10 @@ class SyncTracker:
         """Append a row to etl_sync_history (TimescaleDB hypertable).
 
         This is best-effort: if the table doesn't exist yet (migration 025
-        hasn't been applied), the INSERT is silently skipped so existing
-        ETL runs are not disrupted. Uses a SAVEPOINT so that a failed INSERT
-        doesn't abort the surrounding transaction.
+        hasn't been applied), the INSERT is skipped so existing ETL runs
+        are not disrupted.
         """
         try:
-            self.cur.execute("SAVEPOINT sync_history_write")
             self.cur.execute("""
                 INSERT INTO breezeway.etl_sync_history
                     (region_code, entity_type, sync_status, sync_started_at,
@@ -254,12 +252,14 @@ class SyncTracker:
                 error_message,
                 duration
             ))
-            self.cur.execute("RELEASE SAVEPOINT sync_history_write")
-        except Exception:
-            # Table may not exist yet (pre-migration 025); rollback to
-            # savepoint so the surrounding transaction remains valid
+            self.conn.commit()
+        except Exception as e:
+            import logging
+            logging.getLogger("SyncTracker").warning(
+                f"Failed to write sync history for {self.region_code}/{self.entity_type}: {e}"
+            )
             try:
-                self.cur.execute("ROLLBACK TO SAVEPOINT sync_history_write")
+                self.conn.rollback()
             except Exception:
                 pass
 
