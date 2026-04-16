@@ -152,14 +152,14 @@ class TokenManager:
             "Authorization": f"JWT {refresh_token}"
         }
 
-        response = requests.post(url, headers=headers)
+        response = requests.post(url, headers=headers, timeout=30)
 
         # Handle rate limiting
         if response.status_code == 429:
             retry_after = int(response.headers.get('Retry-After', 60))
             print(f"⏳ Rate limited, waiting {retry_after} seconds...")
             time.sleep(retry_after)
-            response = requests.post(url, headers=headers)
+            response = requests.post(url, headers=headers, timeout=30)
 
         if response.status_code != 200:
             raise Exception(
@@ -214,14 +214,14 @@ class TokenManager:
             "client_secret": client_secret
         }
 
-        response = requests.post(url, headers=headers, json=data)
+        response = requests.post(url, headers=headers, json=data, timeout=30)
 
         # Handle rate limiting
         if response.status_code == 429:
             retry_after = int(response.headers.get('Retry-After', 60))
             print(f"⏳ Rate limited, waiting {retry_after} seconds...")
             time.sleep(retry_after)
-            response = requests.post(url, headers=headers, json=data)
+            response = requests.post(url, headers=headers, json=data, timeout=30)
 
         if response.status_code != 200:
             error_msg = f"Token generation failed: {response.status_code} - {response.text}"
