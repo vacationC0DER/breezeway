@@ -6,6 +6,7 @@ Receives webhook events from Breezeway API for:
 - task: Task updates (created, updated, completed, etc.)
 """
 
+import hmac
 import logging
 from datetime import datetime
 from typing import Dict, Any
@@ -13,7 +14,7 @@ from typing import Dict, Any
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 
-from .config import HOST, PORT, DB_SCHEMA
+from .config import HOST, PORT, DB_SCHEMA, WEBHOOK_SECRET
 from .handlers import process_property_status_event, process_task_event, get_db_connection, return_db_connection
 
 # Configure logging
@@ -31,6 +32,23 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
+@app.middleware("http")
+async def verify_webhook_secret(request: Request, call_next):
+    """Verify webhook secret header for POST endpoints"""
+    if request.method == "GET" or request.url.path == "/health":
+        return await call_next(request)
+
+    if WEBHOOK_SECRET:
+        provided_secret = request.headers.get("X-Webhook-Secret", "")
+        if not hmac.compare_digest(provided_secret, WEBHOOK_SECRET):
+            logger.warning(f"Rejected webhook: invalid secret from {request.client.host}")
+            return JSONResponse(
+                content={"status": "unauthorized"},
+                status_code=401,
+            )
+
+    return await call_next(request)
 
 @app.get("/health")
 async def health_check():
@@ -61,7 +79,7 @@ async def webhook_property_status(request: Request):
         logger.error(f"Error processing property-status webhook: {e}", exc_info=True)
         # Still return 200 to acknowledge receipt (log the error internally)
         return JSONResponse(
-            content={"status": "error", "message": str(e)},
+            content={"status": "accepted", "message": "event received"},
             status_code=200
         )
 
@@ -85,7 +103,7 @@ async def webhook_task(request: Request):
         logger.error(f"Error processing task webhook: {e}", exc_info=True)
         # Still return 200 to acknowledge receipt
         return JSONResponse(
-            content={"status": "error", "message": str(e)},
+            content={"status": "accepted", "message": "event received"},
             status_code=200
         )
 

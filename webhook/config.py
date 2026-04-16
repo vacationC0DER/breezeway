@@ -13,6 +13,14 @@ envs = dict(dotenv_values(env_path))
 HOST = "0.0.0.0"
 PORT = 8001
 
+# Webhook authentication
+WEBHOOK_SECRET = envs.get("WEBHOOK_SECRET", "").strip().strip('"')
+if not WEBHOOK_SECRET:
+    import logging as _log
+    _log.getLogger(__name__).warning(
+        "WEBHOOK_SECRET not configured - webhook endpoints are UNPROTECTED"
+    )
+
 # Database config
 DATABASE_URL = (
     f"postgresql://{envs.get('USER', 'breezeway')}:{envs.get('PASSWORD', '')}@"
