@@ -205,51 +205,41 @@ def add_region(tenant_id: int, body: RegionCreate):
 
 @app.post("/tenants/{tenant_id}/regions/{region_code}/launch", status_code=202)
 def launch_region(tenant_id: int, region_code: str):
-    """Run `run_etl.py <region> all` in foreground; on success flip active=true.
+    """Detached backfill — returns immediately with 202.
 
-    Synchronous: blocks for ~5–10 min while the backfill runs. Frontend should
-    show a spinner + GET /tenants/{id}/status periodically.
+    Supabase Edge Functions cap responses at ~60–150s; a full backfill takes
+    5–10 min. We Popen launch_wrapper.py in its own session so the child
+    survives this request returning. The wrapper runs run_etl.py and on
+    success flips active=true. Frontend polls /tenants/{id}/status to track
+    progress via etl_sync_log rows and the region's active flag.
     """
     with _db() as conn, conn.cursor() as cur:
         cur.execute(
-            """
-            SELECT tr.region_code, tr.active, t.status
-            FROM breezeway.tenant_regions tr
-            JOIN breezeway.tenants t ON t.id = tr.tenant_id
-            WHERE tr.region_code = %s AND tr.tenant_id = %s
-            """,
+            "SELECT 1 FROM breezeway.tenant_regions WHERE region_code = %s AND tenant_id = %s",
             (region_code, tenant_id),
         )
-        row = cur.fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="region not found for this tenant")
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="region not found for this tenant")
 
-    started = datetime.utcnow()
-    proc = subprocess.run(
-        ["python3", ETL_RUNNER, region_code, "all"],
+    log_path = f"/root/Breezeway/logs/launch_{region_code}.log"
+    logfile = open(log_path, "a")
+    logfile.write(f"\n=== launch invoked {datetime.utcnow().isoformat()} ===\n")
+    logfile.flush()
+    subprocess.Popen(
+        ["python3", "/root/Breezeway/admin/launch_wrapper.py", region_code, str(tenant_id)],
         cwd=ETL_CWD,
-        capture_output=True,
-        text=True,
-        timeout=20 * 60,
+        stdout=logfile,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
     )
-    duration_s = (datetime.utcnow() - started).total_seconds()
-    if proc.returncode != 0:
-        log.error("launch failed region=%s rc=%s stderr=%s", region_code, proc.returncode, proc.stderr[-500:])
-        raise HTTPException(
-            status_code=500,
-            detail={"ok": False, "rc": proc.returncode, "stderr_tail": proc.stderr[-500:]},
-        )
-
-    with _db() as conn, conn.cursor() as cur:
-        cur.execute(
-            "UPDATE breezeway.tenant_regions SET active = true, updated_at = now() WHERE region_code = %s",
-            (region_code,),
-        )
-        cur.execute(
-            "UPDATE breezeway.tenants SET status = 'active', updated_at = now() WHERE id = %s AND status != 'active'",
-            (tenant_id,),
-        )
-    return {"ok": True, "region_code": region_code, "active": True, "duration_s": duration_s}
+    log.info("launch detached region=%s tenant=%s log=%s", region_code, tenant_id, log_path)
+    return {
+        "ok": True,
+        "started": True,
+        "region_code": region_code,
+        "log_file": log_path,
+        "note": "Backfill running in background (~5–10 min). Poll /tenants/{id}/status; region.active flips to true on success.",
+    }
 
 
 @app.get("/tenants/{tenant_id}/status")
