@@ -29,7 +29,14 @@ log "HOURLY ETL START"
 log "=========================================================================="
 
 # All 8 regions
-REGIONS="nashville austin smoky hilton_head breckenridge sea_ranch mammoth hill_country"
+# Active regions (DB-driven from breezeway.tenant_regions as of 2026-05-15).
+# Falls back to hardcoded list if psql fails so the cron is never silenced.
+REGIONS_FALLBACK="nashville austin smoky hilton_head breckenridge sea_ranch mammoth hill_country"
+REGIONS=$(sudo -u postgres psql -d breezeway -tAc "SELECT string_agg(region_code, ' ' ORDER BY region_code) FROM breezeway.tenant_regions WHERE active = true" 2>/dev/null)
+if [ -z "$REGIONS" ]; then
+    log "WARNING: tenant_regions lookup empty/failed, using fallback list"
+    REGIONS="$REGIONS_FALLBACK"
+fi
 
 # Track failures
 TOTAL_JOBS=0

@@ -15,6 +15,7 @@ from datetime import datetime
 import logging
 import time
 import json
+import concurrent.futures
 
 from auth_manager import TokenManager
 from sync_tracker import SyncTracker
@@ -560,9 +561,103 @@ class BreezewayETL:
 
         return transformed_children
 
+    def _fetch_single_child(self, token: str, parent_record: Dict, child_name: str,
+                            child_config: Dict) -> Tuple[List[Dict], int]:
+        """
+        Thread-safe worker: fetch and transform one parent's child records via API.
+
+        Args:
+            token: Pre-fetched JWT token string (avoids thread-unsafe TokenManager calls)
+            parent_record: Transformed parent record
+            child_name: Name of the child type (e.g. 'comments', 'requirements')
+            child_config: Child table configuration dict
+
+        Returns:
+            Tuple of (transformed_records_list, api_call_count)
+        """
+        endpoint_template = child_config['endpoint_template']
+        parent_id_field = child_config['parent_id_field']
+        parent_id = parent_record.get(parent_id_field)
+
+        if not parent_id:
+            return [], 0
+
+        endpoint = endpoint_template.format(task_id=parent_id)
+        headers = {
+            "accept": "application/json",
+            "Authorization": f"JWT {token}"
+        }
+        url = f"{API_CONFIG['base_url']}{endpoint}"
+
+        try:
+            response = api_request_with_retry(url, headers)
+        except Exception as e:
+            self.logger.warning(f"Failed to fetch {child_name} for {parent_id_field}={parent_id}: {e}")
+            return [], 1
+
+        # Parse response - handle both formats (direct list or dict with 'data' key)
+        response_data = response.json()
+        if isinstance(response_data, list):
+            api_children = response_data
+        elif isinstance(response_data, dict):
+            api_children = response_data.get('data', [])
+        else:
+            api_children = []
+
+        if not isinstance(api_children, list):
+            api_children = []
+
+        transformed_list = []
+        for child in api_children:
+            transformed_child = {
+                'region_code': self.region_code
+            }
+
+            if child_name == 'comments':
+                transformed_child.update({
+                    'comment_id': str(child.get('id', '')),
+                    'comment': child.get('comment'),
+                    'author_name': child.get('author', {}).get('name'),
+                    'author_id': str(child.get('author', {}).get('id', '')),
+                    'created_at': child.get('created_at'),
+                    'updated_at': child.get('updated_at')
+                })
+
+            elif child_name == 'requirements':
+                fields_mapping = child_config.get('fields_mapping', {})
+                if fields_mapping:
+                    for api_field, db_column in fields_mapping.items():
+                        value = child.get(api_field)
+                        if api_field in ['action', 'photos'] and value is not None:
+                            value = json.dumps(value) if value else None
+                        transformed_child[db_column] = value
+                else:
+                    transformed_child.update({
+                        'requirement_id': str(child.get('id', '')),
+                        'section_name': child.get('section_name'),
+                        'action': json.dumps(child.get('action')) if child.get('action') else None,
+                        'response': child.get('response'),
+                        'type_requirement': child.get('type'),
+                        'photo_required': child.get('photo_required'),
+                        'photos': json.dumps(child.get('photos')) if child.get('photos') else None,
+                        'note': child.get('note'),
+                        'home_element_name': child.get('home_element_name')
+                    })
+
+            # For hypertable children, copy parent's partition column
+            child_partition_col = child_config.get('hypertable_partition_column')
+            if child_partition_col and child_partition_col not in transformed_child:
+                transformed_child[child_partition_col] = parent_record.get(child_partition_col)
+
+            # Store parent API ID for FK resolution
+            transformed_child['_parent_api_id'] = str(parent_id)
+            transformed_list.append(transformed_child)
+
+        return transformed_list, 1
+
     def fetch_api_children(self, parent_records: List[Dict], child_records: Dict[str, List[Dict]]) -> Dict[str, List[Dict]]:
         """
-        Fetch child records that require separate API calls
+        Fetch child records that require separate API calls, using concurrent threads.
 
         Args:
             parent_records: Transformed parent records
@@ -583,6 +678,10 @@ class BreezewayETL:
 
         self.logger.info(f"Fetching API-based children: {list(api_child_tables.keys())}")
 
+        # Get token ONCE before threading (TokenManager is not thread-safe)
+        token = self.token_mgr.get_valid_token()
+        max_workers = API_CONFIG.get('max_child_api_workers', 15)
+
         for child_name, child_config in api_child_tables.items():
             endpoint_template = child_config.get('endpoint_template')
             parent_id_field = child_config.get('parent_id_field')
@@ -591,99 +690,45 @@ class BreezewayETL:
                 self.logger.warning(f"Skipping {child_name}: missing endpoint_template or parent_id_field")
                 continue
 
+            # Filter to parents that have the required ID field
+            eligible_parents = [r for r in parent_records if r.get(parent_id_field)]
+
+            self.logger.info(
+                f"Fetching {child_name} for {len(eligible_parents)} parents "
+                f"with {max_workers} workers"
+            )
+
             child_records_list = []
+            api_call_count = 0
+            errors = 0
 
-            for parent_record in parent_records:
-                parent_id = parent_record.get(parent_id_field)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(
+                        self._fetch_single_child, token, parent_record,
+                        child_name, child_config
+                    ): parent_record
+                    for parent_record in eligible_parents
+                }
 
-                if not parent_id:
-                    continue
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        records, calls = future.result()
+                        child_records_list.extend(records)
+                        api_call_count += calls
+                    except Exception as e:
+                        parent = futures[future]
+                        parent_id = parent.get(parent_id_field, '?')
+                        self.logger.warning(
+                            f"Thread error fetching {child_name} for "
+                            f"{parent_id_field}={parent_id}: {e}"
+                        )
+                        errors += 1
 
-                # Build endpoint URL
-                endpoint = endpoint_template.format(task_id=parent_id)
-
-                try:
-                    # Get token and build headers
-                    token = self.token_mgr.get_valid_token()
-                    headers = {
-                        "accept": "application/json",
-                        "Authorization": f"JWT {token}"
-                    }
-
-                    # Build full URL
-                    url = f"{API_CONFIG['base_url']}{endpoint}"
-
-                    # Fetch from API with retry
-                    response = api_request_with_retry(url, headers)
-
-                    self.stats['api_calls'] += 1
-                    self.tracker.increment_api_calls()
-
-                    # Parse response - handle both formats (direct list or dict with 'data' key)
-                    response_data = response.json()
-                    if isinstance(response_data, list):
-                        api_children = response_data
-                    elif isinstance(response_data, dict):
-                        api_children = response_data.get('data', [])
-                    else:
-                        api_children = []
-
-                    if not isinstance(api_children, list):
-                        api_children = []
-
-                    # Transform each child record
-                    for child in api_children:
-                        transformed_child = {
-                            'region_code': self.region_code
-                        }
-
-                        # Use the same transformation logic
-                        if child_name == 'comments':
-                            transformed_child.update({
-                                'comment_id': str(child.get('id', '')),
-                                'comment': child.get('comment'),
-                                'author_name': child.get('author', {}).get('name'),
-                                'author_id': str(child.get('author', {}).get('id', '')),
-                                'created_at': child.get('created_at'),
-                                'updated_at': child.get('updated_at')
-                            })
-
-                        elif child_name == 'requirements':
-                            # Use fields_mapping from config if available
-                            fields_mapping = child_config.get('fields_mapping', {})
-                            if fields_mapping:
-                                for api_field, db_column in fields_mapping.items():
-                                    value = child.get(api_field)
-                                    # Convert to JSON for complex fields
-                                    if api_field in ['action', 'photos'] and value is not None:
-                                        value = json.dumps(value) if value else None
-                                    transformed_child[db_column] = value
-                            else:
-                                # Fallback to manual mapping if no fields_mapping
-                                transformed_child.update({
-                                    'requirement_id': str(child.get('id', '')),
-                                    'section_name': child.get('section_name'),
-                                    'action': json.dumps(child.get('action')) if child.get('action') else None,
-                                    'response': child.get('response'),
-                                    'type_requirement': child.get('type'),
-                                    'photo_required': child.get('photo_required'),
-                                    'photos': json.dumps(child.get('photos')) if child.get('photos') else None,
-                                    'note': child.get('note'),
-                                    'home_element_name': child.get('home_element_name')
-                                })
-
-                        # For hypertable children, copy parent's partition column
-                        child_partition_col = child_config.get('hypertable_partition_column')
-                        if child_partition_col and child_partition_col not in transformed_child:
-                            transformed_child[child_partition_col] = parent_record.get(child_partition_col)
-
-                        # Store parent API ID for FK resolution
-                        transformed_child['_parent_api_id'] = str(parent_id)
-                        child_records_list.append(transformed_child)
-
-                except Exception as e:
-                    self.logger.warning(f"Failed to fetch {child_name} for {parent_id_field}={parent_id}: {e}")
-                    continue
+            # Aggregate stats in main thread (no locking needed)
+            self.stats['api_calls'] += api_call_count
+            for _ in range(api_call_count):
+                self.tracker.increment_api_calls()
 
             # Add to child_records dict
             if child_name in child_records:
@@ -691,7 +736,10 @@ class BreezewayETL:
             else:
                 child_records[child_name] = child_records_list
 
-            self.logger.info(f"Fetched {len(child_records_list)} {child_name} records via API")
+            self.logger.info(
+                f"Fetched {len(child_records_list)} {child_name} records via API "
+                f"({api_call_count} calls, {errors} errors)"
+            )
 
         return child_records
 
@@ -762,11 +810,20 @@ class BreezewayETL:
         # Warn about records that would hit compressed chunks (>90 days old)
         if partition_col and partition_col in columns:
             from datetime import timedelta
+            from dateutil.parser import parse as parse_date
             compression_threshold = datetime.now() - timedelta(days=90)
-            old_count = sum(
-                1 for r in records
-                if r.get(partition_col) and r[partition_col] < compression_threshold
-            )
+            old_count = 0
+            for r in records:
+                val = r.get(partition_col)
+                if val:
+                    try:
+                        dt_val = val if isinstance(val, datetime) else parse_date(str(val))
+                        if dt_val.tzinfo:
+                            dt_val = dt_val.replace(tzinfo=None)
+                        if dt_val < compression_threshold:
+                            old_count += 1
+                    except (ValueError, TypeError):
+                        pass
             if old_count > 0:
                 self.logger.warning(
                     f"{old_count} records have {partition_col} older than 90 days "
@@ -803,11 +860,11 @@ class BreezewayETL:
             RETURNING (xmax = 0) AS inserted
         """
 
-        # Execute batch UPSERT
-        execute_values(cur, query, values, page_size=DATABASE_CONFIG['batch_size'])
+        # Execute batch UPSERT (fetch=True accumulates RETURNING rows across all batches;
+        # without it, cur.fetchall() only sees the last batch's results — bug fixed 2026-05-13)
+        results = execute_values(cur, query, values, page_size=DATABASE_CONFIG['batch_size'], fetch=True)
 
         # Count inserted vs updated
-        results = cur.fetchall()
         inserted = sum(1 for r in results if r['inserted'])
         updated = len(results) - inserted
 

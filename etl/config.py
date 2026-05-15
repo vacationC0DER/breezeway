@@ -393,7 +393,8 @@ API_CONFIG = {
     'page_size': 100,
     'timeout': 30,
     'max_retries': 3,
-    'retry_delay': 5
+    'retry_delay': 5,
+    'max_child_api_workers': 15
 }
 
 # ============================================================================
@@ -420,11 +421,80 @@ LOGGING_CONFIG = {
 # HELPER FUNCTIONS
 # ============================================================================
 
+# ----------------------------------------------------------------------------
+# DB-driven region lookup (added 2026-05-15 with multitenancy work).
+# Queries breezeway.tenant_regions; falls back to the REGIONS literal above
+# if the DB is unreachable (so a DB blip cannot stop the ETL).
+# In-process 60s TTL cache avoids hammering the DB on each cron tick.
+# ----------------------------------------------------------------------------
+import os as _os
+import time as _time
+import logging as _logging
+from typing import Optional as _Optional
+
+_REGION_CACHE: dict = {}
+_REGION_CACHE_AT: float = 0.0
+_REGION_CACHE_TTL_SEC = 60
+_region_logger = _logging.getLogger('etl.config.regions')
+
+
+def _load_regions_from_db() -> _Optional[dict]:
+    """Load active regions from breezeway.tenant_regions. None on failure."""
+    try:
+        import psycopg2
+        from dotenv import dotenv_values
+    except ImportError:
+        return None
+    env_path = _os.path.join(_os.path.dirname(__file__), '..', '.env')
+    envs = dict(dotenv_values(env_path))
+    if not envs.get('USER'):
+        return None
+    dsn = (f"postgresql://{envs['USER']}:{envs['PASSWORD']}"
+           f"@{envs['HOST']}:{envs['PORT']}/{envs['DB']}"
+           f"?sslmode=require&connect_timeout=5")
+    try:
+        with psycopg2.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT region_code, display_name, breezeway_company_id, tenant_id "
+                    "FROM breezeway.tenant_regions WHERE active = true ORDER BY region_code"
+                )
+                rows = cur.fetchall()
+        return {
+            r[0]: {
+                'name': r[1],
+                'company_id': int(r[2]) if str(r[2]).isdigit() else r[2],
+                'breezeway_company_id': str(r[2]),
+                'tenant_id': r[3],
+            }
+            for r in rows
+        }
+    except Exception as e:
+        _region_logger.warning(f'tenant_regions lookup failed, falling back to literal REGIONS: {e}')
+        return None
+
+
+def _get_regions_cached() -> dict:
+    """Returns active regions dict. DB-first with 60s cache, literal fallback."""
+    global _REGION_CACHE, _REGION_CACHE_AT
+    now = _time.monotonic()
+    if _REGION_CACHE and (now - _REGION_CACHE_AT) < _REGION_CACHE_TTL_SEC:
+        return _REGION_CACHE
+    db_regions = _load_regions_from_db()
+    if db_regions:
+        _REGION_CACHE = db_regions
+        _REGION_CACHE_AT = now
+        return db_regions
+    # Fallback: literal REGIONS dict (does not include tenant_id)
+    return REGIONS
+
+
 def get_region_config(region_code: str) -> dict:
-    """Get configuration for a specific region"""
-    if region_code not in REGIONS:
-        raise ValueError(f"Unknown region: {region_code}. Valid regions: {list(REGIONS.keys())}")
-    return REGIONS[region_code]
+    """Get configuration for a specific region (DB-first, REGIONS-literal fallback)."""
+    regions = _get_regions_cached()
+    if region_code not in regions:
+        raise ValueError(f"Unknown region: {region_code}. Valid regions: {list(regions.keys())}")
+    return regions[region_code]
 
 def get_entity_config(entity_type: str) -> dict:
     """Get configuration for a specific entity type"""
@@ -433,8 +503,8 @@ def get_entity_config(entity_type: str) -> dict:
     return ENTITY_CONFIGS[entity_type]
 
 def get_all_regions() -> list:
-    """Get list of all region codes"""
-    return list(REGIONS.keys())
+    """Get list of all active region codes (DB-first, REGIONS-literal fallback)."""
+    return list(_get_regions_cached().keys())
 
 def get_all_entities() -> list:
     """Get list of all entity types"""
