@@ -233,6 +233,12 @@ def launch_region(tenant_id: int, region_code: str):
 
 @app.get("/tenants/{tenant_id}/status")
 def tenant_status(tenant_id: int):
+    """Polling endpoint — returns 200 with tenant=null if tenant doesn't exist yet.
+
+    This is called by the integrations index page on every load, so 404 would
+    light up the browser console with a noisy network error before the user
+    has even started the wizard.
+    """
     with _db() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id, name, status, created_at FROM breezeway.tenants WHERE id = %s",
@@ -240,7 +246,7 @@ def tenant_status(tenant_id: int):
         )
         t = cur.fetchone()
         if not t:
-            raise HTTPException(status_code=404, detail="tenant not found")
+            return {"tenant": None, "regions": []}
 
         cur.execute(
             """
