@@ -457,7 +457,7 @@ def _load_regions_from_db() -> _Optional[dict]:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT region_code, display_name, breezeway_company_id, tenant_id "
-                    "FROM breezeway.tenant_regions WHERE active = true ORDER BY region_code"
+                    "FROM breezeway.tenant_regions ORDER BY region_code"
                 )
                 rows = cur.fetchall()
         return {
