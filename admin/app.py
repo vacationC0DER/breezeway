@@ -140,6 +140,27 @@ def add_region(tenant_id: int, body: RegionCreate):
         if cur.fetchone() is None:
             raise HTTPException(status_code=404, detail=f"tenant {tenant_id} not found")
 
+        # Legacy breezeway.regions is the FK target for properties / reservations /
+        # people / tags / etc. Must be populated BEFORE the ETL writes any rows.
+        cur.execute(
+            """
+            INSERT INTO breezeway.regions
+                (region_code, region_name, company_id, breezeway_company_id, is_active)
+            VALUES (%s, %s, %s, %s, true)
+            ON CONFLICT (region_code) DO UPDATE
+                SET region_name = EXCLUDED.region_name,
+                    company_id = EXCLUDED.company_id,
+                    breezeway_company_id = EXCLUDED.breezeway_company_id,
+                    updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                body.region_code,
+                body.display_name,
+                int(body.breezeway_company_id) if body.breezeway_company_id.isdigit() else 0,
+                body.breezeway_company_id,
+            ),
+        )
+
         cur.execute(
             """
             INSERT INTO breezeway.tenant_regions
