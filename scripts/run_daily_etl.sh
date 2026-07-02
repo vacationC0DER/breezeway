@@ -39,6 +39,11 @@ if [ -z "$REGIONS" ]; then
 fi
 
 # All daily entities
+# Child API calls (requirements/comments) windowed to recently-updated tasks
+# (ETL plan Task 2b.2). Override with BZ_TASK_WINDOW_DAYS=0 for a full sweep
+# (monthly cron does this). Default 35 days.
+export BZ_TASK_WINDOW_DAYS="${BZ_TASK_WINDOW_DAYS-35}"
+
 ENTITIES="tasks people supplies tags subdepartments templates property_tags reservation_tags"
 
 # Track failures

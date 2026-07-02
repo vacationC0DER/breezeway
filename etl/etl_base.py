@@ -695,6 +695,39 @@ class BreezewayETL:
             # Filter to parents that have the required ID field
             eligible_parents = [r for r in parent_records if r.get(parent_id_field)]
 
+            # BZ_TASK_WINDOW_DAYS (ETL plan Task 2b.2): only refresh children
+            # for recently-updated parents. The parent list is still fetched
+            # and upserted in full (cheap, paginated); child records of
+            # unchanged parents stay as-is (child load is UPSERT-only).
+            # Unset or <=0 -> full behavior (monthly sweep uses 0).
+            import os as _os
+            try:
+                _window_days = int(_os.environ.get("BZ_TASK_WINDOW_DAYS", "0") or "0")
+            except ValueError:
+                _window_days = 0
+            if _window_days > 0:
+                from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+                _cutoff = _dt.now(_tz.utc) - _td(days=_window_days)
+
+                def _recent(rec):
+                    v = rec.get("updated_at") or rec.get("created_at")
+                    if v is None:
+                        return True  # no timestamp -> be safe, fetch children
+                    if isinstance(v, str):
+                        try:
+                            v = _dt.fromisoformat(v.replace("Z", "+00:00"))
+                        except ValueError:
+                            return True
+                    if v.tzinfo is None:
+                        v = v.replace(tzinfo=_tz.utc)
+                    return v >= _cutoff
+
+                _before = len(eligible_parents)
+                eligible_parents = [r for r in eligible_parents if _recent(r)]
+                self.logger.info(
+                    f"BZ_TASK_WINDOW_DAYS={_window_days}: child fetch narrowed "
+                    f"{_before} -> {len(eligible_parents)} parents")
+
             self.logger.info(
                 f"Fetching {child_name} for {len(eligible_parents)} parents "
                 f"with {max_workers} workers"
