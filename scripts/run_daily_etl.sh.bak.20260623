@@ -39,7 +39,7 @@ if [ -z "$REGIONS" ]; then
 fi
 
 # All daily entities
-ENTITIES="tasks people supplies tags subdepartments templates property_tags reservation_tags"
+ENTITIES="tasks people supplies tags"
 
 # Track failures
 TOTAL_JOBS=0
@@ -69,60 +69,6 @@ for entity in $ENTITIES; do
     done
     log ""
 done
-
-# ----------------------------------------------------------------------------
-# Reservation-linked tasks (GET /reservation/{id}/tasks), 2026-onward.
-# Runs last so reservations (hourly) + tasks (above) are current and the
-# reservation_pk / task_pk soft FKs resolve. Handles all regions internally.
-# ----------------------------------------------------------------------------
-log "Starting reservation_tasks ETL (2026-onward) for all regions..."
-START_TIME=$(date +%s)
-TOTAL_JOBS=$((TOTAL_JOBS + 1))
-cd "$PROJECT_DIR"
-python3 etl/reservation_tasks_etl.py all --since 2026-01-01 >> "$LOG_FILE" 2>&1
-EXIT_CODE=$?
-END_TIME=$(date +%s)
-DURATION=$((END_TIME - START_TIME))
-if [ $EXIT_CODE -eq 0 ]; then
-    log "  ✓ SUCCESS: reservation_tasks / all regions (${DURATION}s)"
-else
-    log "  ✗ FAILED: reservation_tasks / all regions (${DURATION}s)"
-    FAILED_JOBS=$((FAILED_JOBS + 1))
-fi
-log ""
-
-log ""
-log "Pushing reservation_tasks -> Supabase (incremental) for all regions..."
-START_TIME=$(date +%s)
-TOTAL_JOBS=$((TOTAL_JOBS + 1))
-cd "$PROJECT_DIR"
-python3 etl/reservation_tasks_supabase_push.py all >> "$LOG_FILE" 2>&1
-EXIT_CODE=$?
-END_TIME=$(date +%s)
-DURATION=$((END_TIME - START_TIME))
-if [ $EXIT_CODE -eq 0 ]; then
-    log "  OK SUCCESS: reservation_tasks Supabase push / all regions (${DURATION}s)"
-else
-    log "  XX FAILED: reservation_tasks Supabase push / all regions (${DURATION}s)"
-    FAILED_JOBS=$((FAILED_JOBS + 1))
-fi
-log ""
-
-log "Pushing bz_property_dim -> Supabase (incremental) for all regions..."
-START_TIME=$(date +%s)
-TOTAL_JOBS=$((TOTAL_JOBS + 1))
-cd "$PROJECT_DIR"
-python3 etl/bz_property_dim_supabase_push.py all >> "$LOG_FILE" 2>&1
-EXIT_CODE=$?
-END_TIME=$(date +%s)
-DURATION=$((END_TIME - START_TIME))
-if [ $EXIT_CODE -eq 0 ]; then
-    log "  OK SUCCESS: bz_property_dim Supabase push / all regions (${DURATION}s)"
-else
-    log "  XX FAILED: bz_property_dim Supabase push / all regions (${DURATION}s)"
-    FAILED_JOBS=$((FAILED_JOBS + 1))
-fi
-log ""
 
 log "=========================================================================="
 log "DAILY ETL COMPLETE"

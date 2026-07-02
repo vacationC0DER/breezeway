@@ -45,18 +45,6 @@ proc = subprocess.run(
 )
 log(f"backfill exit rc={proc.returncode}")
 
-# reservation_tasks lives outside run_etl's ENTITY_CONFIGS (separate script), so a
-# plain `run_etl all` never covers it. Pull it and push it to Supabase here so a
-# newly launched region is complete. Non-fatal: the nightly cron retries, and we
-# don't block region activation on it.
-if proc.returncode == 0:
-    for _step in (
-        ["python3", f"{ROOT}/etl/reservation_tasks_etl.py", REGION, "--since", "2026-01-01"],
-        ["python3", f"{ROOT}/etl/reservation_tasks_supabase_push.py", REGION, "--full"],
-    ):
-        _rc = subprocess.run(_step, cwd=ROOT, capture_output=False).returncode
-        log(f"{_step[1].split('/')[-1]} exit rc={_rc}")
-
 if proc.returncode == 0:
     with psycopg2.connect(DSN) as conn, conn.cursor() as cur:
         cur.execute(

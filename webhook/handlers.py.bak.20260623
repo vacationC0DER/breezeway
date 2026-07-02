@@ -133,19 +133,7 @@ def process_property_status_event(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(f"Failed to update property from webhook: {e}")
     
     mark_event_processed(event_id, error_message)
-
-    # Real-time push to VR Goals Supabase (best-effort; never blocks the ack).
-    try:
-        from .supabase_sync import push_property_status
-        region_code = None
-        if company_id:
-            region_code = get_region_by_company_id(int(company_id))
-        if not region_code or region_code == "unknown":
-            region_code = _resolve_region_from_property(property_id)
-        push_property_status(payload, region_code, event_id=event_id)
-    except Exception as e:
-        logger.error(f"Supabase property_status push failed (non-fatal): {e}")
-
+    
     return {"status": "ok", "event_id": event_id}
 
 

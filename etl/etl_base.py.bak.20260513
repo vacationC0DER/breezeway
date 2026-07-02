@@ -464,8 +464,6 @@ class BreezewayETL:
 
             # For guests
             elif child_name == 'guests':
-                if child.get('name') is None and child.get('email') is None and child.get('phone') is None:
-                    continue  # skip content-less Breezeway guest items; prevents all-NULL runaway (incident 2026-06-25)
                 transformed_child.update({
                     'guest_name': child.get('name'),
                     'guest_email': child.get('email'),
@@ -832,14 +830,10 @@ class BreezewayETL:
                     f"and may fail UPSERT against compressed hypertable chunks"
                 )
 
-        # Build update clause (all columns except conflict keys and any the
-        # entity marks no_update_columns). property_status is owned by the
-        # real-time Breezeway webhook (supabase_sync / handlers); the poll must
-        # set it on INSERT but never clobber it on UPDATE.
-        no_update_columns = set(self.entity_config.get('no_update_columns', []))
+        # Build update clause (all columns except conflict keys)
         update_columns = [
             c for c in columns
-            if c not in conflict_keys and c != 'created_at' and c not in no_update_columns
+            if c not in conflict_keys and c != 'created_at'
         ]
         update_clause = ', '.join([
             f"{col} = EXCLUDED.{col}"
@@ -866,11 +860,11 @@ class BreezewayETL:
             RETURNING (xmax = 0) AS inserted
         """
 
-        # Execute batch UPSERT (fetch=True accumulates RETURNING rows across all batches;
-        # without it, cur.fetchall() only sees the last batch's results — bug fixed 2026-05-13)
-        results = execute_values(cur, query, values, page_size=DATABASE_CONFIG['batch_size'], fetch=True)
+        # Execute batch UPSERT
+        execute_values(cur, query, values, page_size=DATABASE_CONFIG['batch_size'])
 
         # Count inserted vs updated
+        results = cur.fetchall()
         inserted = sum(1 for r in results if r['inserted'])
         updated = len(results) - inserted
 

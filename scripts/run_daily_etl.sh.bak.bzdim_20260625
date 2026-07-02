@@ -108,22 +108,6 @@ else
 fi
 log ""
 
-log "Pushing bz_property_dim -> Supabase (incremental) for all regions..."
-START_TIME=$(date +%s)
-TOTAL_JOBS=$((TOTAL_JOBS + 1))
-cd "$PROJECT_DIR"
-python3 etl/bz_property_dim_supabase_push.py all >> "$LOG_FILE" 2>&1
-EXIT_CODE=$?
-END_TIME=$(date +%s)
-DURATION=$((END_TIME - START_TIME))
-if [ $EXIT_CODE -eq 0 ]; then
-    log "  OK SUCCESS: bz_property_dim Supabase push / all regions (${DURATION}s)"
-else
-    log "  XX FAILED: bz_property_dim Supabase push / all regions (${DURATION}s)"
-    FAILED_JOBS=$((FAILED_JOBS + 1))
-fi
-log ""
-
 log "=========================================================================="
 log "DAILY ETL COMPLETE"
 log "Total: $TOTAL_JOBS jobs, Failed: $FAILED_JOBS"

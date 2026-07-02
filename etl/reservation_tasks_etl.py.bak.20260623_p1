@@ -1,0 +1,333 @@
+#!/usr/bin/env python3
+"""
+Reservation-linked tasks ETL
+=============================
+Source: GET /public/inventory/v1/reservation/{id}/tasks  ("Retrieve tasks linked
+to reservation"). Self-contained loader into breezeway.reservation_tasks. Does
+NOT touch the existing tasks / task_assignments pipeline.
+
+For each region, iterates reservations whose check-in OR checkout date is on/after
+--since (default 2026-01-01), calls the endpoint once per reservation (concurrently),
+and UPSERTs the returned task objects. After load it resolves the soft FKs
+(reservation_pk, task_pk) and records a row in breezeway.etl_sync_log.
+
+Usage:
+    python3 etl/reservation_tasks_etl.py all
+    python3 etl/reservation_tasks_etl.py hill_country
+    python3 etl/reservation_tasks_etl.py hill_country --since 2026-01-01
+    python3 etl/reservation_tasks_etl.py hill_country --reservation 100377763   # test one
+    python3 etl/reservation_tasks_etl.py hill_country --limit 50                 # test subset
+"""
+
+import sys
+import os
+
+# Match run_etl.py path setup so `etl.*`, `auth_manager`, `database` all import.
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_parent_dir = os.path.dirname(_current_dir)
+sys.path.insert(0, _parent_dir)
+sys.path.insert(0, os.path.join(_parent_dir, 'shared'))
+
+import argparse
+import logging
+import concurrent.futures
+from datetime import datetime
+
+from psycopg2.extras import execute_values, Json, RealDictCursor
+
+from database import DatabaseManager
+from auth_manager import TokenManager
+from etl.config import REGIONS, API_CONFIG, DATABASE_CONFIG
+from etl.etl_base import api_request_with_retry
+
+SCHEMA = DATABASE_CONFIG['schema']
+ENTITY_TYPE = 'reservation_tasks'
+DEFAULT_SINCE = '2026-01-01'
+MAX_WORKERS = API_CONFIG.get('max_child_api_workers', 15)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+)
+logger = logging.getLogger('ReservationTasks')
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _parse_rate(value):
+    """Breezeway returns rate_paid like '1.00 USD' or null -> numeric or None."""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, str):
+            value = value.split()[0]
+        return float(value)
+    except (ValueError, TypeError, IndexError):
+        return None
+
+
+def _nested(record, key, sub):
+    obj = record.get(key)
+    return obj.get(sub) if isinstance(obj, dict) else None
+
+
+# Column order used by both the INSERT and the row tuples.
+COLUMNS = [
+    'region_code', 'reservation_id', 'task_id', 'home_id',
+    'task_name', 'task_description', 'type_department', 'type_priority',
+    'task_status_code', 'task_status_name', 'task_status_stage',
+    'scheduled_date', 'scheduled_time', 'task_created_at', 'started_at',
+    'finished_at', 'paused', 'rate_type', 'rate_paid', 'total_time',
+    'template_id', 'reference_property_id', 'report_url',
+    'assignments', 'supplies', 'costs', 'tags', 'task_tags', 'raw_payload',
+    'synced_at',
+]
+
+
+def _to_row(region_code, reservation_id, task, synced_at):
+    """Map one API task object to a row tuple in COLUMNS order."""
+    return (
+        region_code,
+        str(reservation_id),
+        str(task.get('id')) if task.get('id') is not None else None,
+        str(task.get('home_id')) if task.get('home_id') is not None else None,
+        task.get('name'),
+        task.get('description'),
+        task.get('type_department'),
+        task.get('type_priority'),
+        _nested(task, 'type_task_status', 'code'),
+        _nested(task, 'type_task_status', 'name'),
+        _nested(task, 'type_task_status', 'stage'),
+        task.get('scheduled_date') or None,
+        task.get('scheduled_time') or None,
+        task.get('created_at') or None,
+        task.get('started_at') or None,
+        task.get('finished_at') or None,
+        task.get('paused'),
+        task.get('rate_type'),
+        _parse_rate(task.get('rate_paid')),
+        task.get('total_time'),
+        str(task.get('template_id')) if task.get('template_id') is not None else None,
+        task.get('reference_property_id') or None,
+        task.get('report_url'),
+        Json(task.get('assignments') or []),
+        Json(task.get('supplies') or []),
+        Json(task.get('costs') or []),
+        Json(task.get('tags') or []),
+        Json(task.get('task_tags') or []),
+        Json(task),
+        synced_at,
+    )
+
+
+UPSERT_SQL = f"""
+    INSERT INTO {SCHEMA}.reservation_tasks ({', '.join(COLUMNS)})
+    VALUES %s
+    ON CONFLICT (reservation_id, task_id, region_code) DO UPDATE SET
+        home_id               = EXCLUDED.home_id,
+        task_name             = EXCLUDED.task_name,
+        task_description      = EXCLUDED.task_description,
+        type_department       = EXCLUDED.type_department,
+        type_priority         = EXCLUDED.type_priority,
+        task_status_code      = EXCLUDED.task_status_code,
+        task_status_name      = EXCLUDED.task_status_name,
+        task_status_stage     = EXCLUDED.task_status_stage,
+        scheduled_date        = EXCLUDED.scheduled_date,
+        scheduled_time        = EXCLUDED.scheduled_time,
+        task_created_at       = EXCLUDED.task_created_at,
+        started_at            = EXCLUDED.started_at,
+        finished_at           = EXCLUDED.finished_at,
+        paused                = EXCLUDED.paused,
+        rate_type             = EXCLUDED.rate_type,
+        rate_paid             = EXCLUDED.rate_paid,
+        total_time            = EXCLUDED.total_time,
+        template_id           = EXCLUDED.template_id,
+        reference_property_id = EXCLUDED.reference_property_id,
+        report_url            = EXCLUDED.report_url,
+        assignments           = EXCLUDED.assignments,
+        supplies              = EXCLUDED.supplies,
+        costs                 = EXCLUDED.costs,
+        tags                  = EXCLUDED.tags,
+        task_tags             = EXCLUDED.task_tags,
+        raw_payload           = EXCLUDED.raw_payload,
+        synced_at             = EXCLUDED.synced_at,
+        updated_at            = now()
+"""
+
+
+# ---------------------------------------------------------------------------
+# Core per-region run
+# ---------------------------------------------------------------------------
+def get_reservation_ids(conn, region_code, since, reservation=None, limit=None):
+    if reservation:
+        return [str(reservation)]
+    sql = f"""
+        SELECT reservation_id
+        FROM {SCHEMA}.reservations
+        WHERE region_code = %s
+          AND (checkin_date >= %s OR checkout_date >= %s)
+        ORDER BY checkin_date DESC NULLS LAST
+    """
+    params = [region_code, since, since]
+    if limit:
+        sql += " LIMIT %s"
+        params.append(limit)
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        return [r[0] for r in cur.fetchall()]
+
+
+def fetch_tasks_for_reservation(reservation_id, headers):
+    """Single GET /reservation/{id}/tasks -> (reservation_id, [task dicts])."""
+    url = f"{API_CONFIG['base_url']}/reservation/{reservation_id}/tasks"
+    try:
+        resp = api_request_with_retry(url, headers)
+        data = resp.json()
+        return reservation_id, data if isinstance(data, list) else []
+    except Exception as e:  # noqa: BLE001 - keep one bad reservation from killing the run
+        logger.warning(f"  reservation {reservation_id}: fetch failed: {e}")
+        return reservation_id, None
+
+
+def resolve_fks(conn, region_code):
+    with conn.cursor() as cur:
+        cur.execute(f"""
+            UPDATE {SCHEMA}.reservation_tasks rt
+               SET reservation_pk = r.id
+              FROM {SCHEMA}.reservations r
+             WHERE rt.reservation_id = r.reservation_id
+               AND rt.region_code = r.region_code
+               AND rt.region_code = %s
+        """, (region_code,))
+        res_pk = cur.rowcount
+        cur.execute(f"""
+            UPDATE {SCHEMA}.reservation_tasks rt
+               SET task_pk = t.id
+              FROM {SCHEMA}.tasks t
+             WHERE rt.task_id = t.task_id
+               AND rt.region_code = t.region_code
+               AND rt.region_code = %s
+        """, (region_code,))
+        task_pk = cur.rowcount
+    conn.commit()
+    return res_pk, task_pk
+
+
+def log_sync(conn, region_code, started_at, status, processed, api_calls, error=None):
+    """UPSERT into etl_sync_log on the (region_code, entity_type) unique key."""
+    completed = datetime.now()
+    with conn.cursor() as cur:
+        cur.execute(f"""
+            INSERT INTO {SCHEMA}.etl_sync_log
+                (region_code, entity_type, sync_started_at, sync_completed_at,
+                 sync_status, last_successful_sync_at, records_processed,
+                 api_calls_made, error_message)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (region_code, entity_type) DO UPDATE SET
+                sync_started_at        = EXCLUDED.sync_started_at,
+                sync_completed_at      = EXCLUDED.sync_completed_at,
+                sync_status            = EXCLUDED.sync_status,
+                last_successful_sync_at = CASE WHEN EXCLUDED.sync_status = 'success'
+                                               THEN EXCLUDED.sync_completed_at
+                                               ELSE {SCHEMA}.etl_sync_log.last_successful_sync_at END,
+                records_processed      = EXCLUDED.records_processed,
+                api_calls_made         = EXCLUDED.api_calls_made,
+                error_message          = EXCLUDED.error_message,
+                updated_at             = now()
+        """, (region_code, ENTITY_TYPE, started_at, completed, status,
+              completed if status == 'success' else None,
+              processed, api_calls, error))
+    conn.commit()
+
+
+def run_region(conn, region_code, since, reservation=None, limit=None):
+    started_at = datetime.now()
+    logger.info(f"[{region_code}] resolving token + reservation list (since {since})")
+    token = TokenManager(region_code, conn).get_valid_token()
+    headers = {"accept": "application/json", "Authorization": f"JWT {token}"}
+
+    reservation_ids = get_reservation_ids(conn, region_code, since, reservation, limit)
+    logger.info(f"[{region_code}] {len(reservation_ids)} reservations to query")
+    if not reservation_ids:
+        log_sync(conn, region_code, started_at, 'success', 0, 0)
+        return {'reservations': 0, 'tasks': 0}
+
+    synced_at = datetime.now()
+    rows = []
+    api_calls = 0
+    failures = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        futures = [pool.submit(fetch_tasks_for_reservation, rid, headers)
+                   for rid in reservation_ids]
+        for fut in concurrent.futures.as_completed(futures):
+            rid, tasks = fut.result()
+            api_calls += 1
+            if tasks is None:
+                failures += 1
+                continue
+            for task in tasks:
+                if task.get('id') is None:
+                    continue
+                rows.append(_to_row(region_code, rid, task, synced_at))
+            if api_calls % 500 == 0:
+                logger.info(f"[{region_code}] {api_calls}/{len(reservation_ids)} reservations fetched")
+
+    logger.info(f"[{region_code}] fetched {len(rows)} task links "
+                f"({failures} reservation fetch failures); upserting")
+
+    if rows:
+        with conn.cursor() as cur:
+            execute_values(cur, UPSERT_SQL, rows, page_size=DATABASE_CONFIG.get('batch_size', 500))
+        conn.commit()
+
+    res_pk, task_pk = resolve_fks(conn, region_code)
+    logger.info(f"[{region_code}] resolved reservation_pk={res_pk}, task_pk={task_pk}")
+
+    status = 'success' if failures == 0 else 'partial'
+    log_sync(conn, region_code, started_at, status, len(rows), api_calls,
+             error=None if failures == 0 else f"{failures} reservation fetch failures")
+    return {'reservations': len(reservation_ids), 'tasks': len(rows),
+            'failures': failures, 'resolved_reservation_pk': res_pk,
+            'resolved_task_pk': task_pk}
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Reservation-linked tasks ETL')
+    parser.add_argument('region', help="region code or 'all'")
+    parser.add_argument('--since', default=DEFAULT_SINCE,
+                        help='only reservations with checkin/checkout >= this date (YYYY-MM-DD)')
+    parser.add_argument('--reservation', help='single Breezeway reservation id (testing)')
+    parser.add_argument('--limit', type=int, help='max reservations to query (testing)')
+    args = parser.parse_args()
+
+    regions = list(REGIONS.keys()) if args.region == 'all' else [args.region]
+    conn = DatabaseManager.get_connection()
+    logger.info(f"Connected to {conn.info.dbname} as {conn.info.user}")
+
+    overall = {}
+    exit_code = 0
+    for region in regions:
+        try:
+            overall[region] = run_region(conn, region, args.since,
+                                          args.reservation, args.limit)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"[{region}] FAILED: {e}", exc_info=True)
+            try:
+                log_sync(conn, region, datetime.now(), 'failed', 0, 0, error=str(e))
+            except Exception:
+                conn.rollback()
+            overall[region] = {'error': str(e)}
+            exit_code = 1
+
+    logger.info("=" * 70)
+    for region, stats in overall.items():
+        logger.info(f"  {region}: {stats}")
+    logger.info("=" * 70)
+    conn.close()
+    sys.exit(exit_code)
+
+
+if __name__ == '__main__':
+    main()

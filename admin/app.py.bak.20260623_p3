@@ -33,8 +33,6 @@ DATABASE_URL = (
     f"{_ENV.get('HOST', 'localhost')}:{_ENV.get('PORT', '5432')}/{_ENV.get('DB', 'breezeway')}"
     f"?sslmode=require&connect_timeout=10"
 )
-SUPABASE_URL = (_ENV.get("SUPABASE_URL") or "").rstrip("/")
-SUPABASE_SERVICE_ROLE_KEY = _ENV.get("SUPABASE_SERVICE_ROLE_KEY") or ""
 ADMIN_TOKEN = os.environ.get("BREEZEWAY_ADMIN_TOKEN", "").strip()
 BREEZEWAY_AUTH_URL = "https://api.breezeway.io/public/auth/v1/"
 ETL_RUNNER = "/root/Breezeway/etl/run_etl.py"
@@ -128,39 +126,6 @@ def create_tenant(body: TenantCreate):
     return {"id": row[0], "name": row[1], "status": row[2], "created_at": row[3].isoformat()}
 
 
-def _seed_supabase_region_map(region_code: str, client_id: int, company_id: str) -> None:
-    """Best-effort: seed Supabase tasks.bz_region_client_map so the property_status
-    and reservation_tasks pushes can resolve client_id for this region without a
-    manual step. Non-fatal — the VPS region add already succeeded."""
-    if not (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY):
-        log.warning("Supabase creds unset — skipping bz_region_client_map seed for %s", region_code)
-        return
-    try:
-        resp = requests.post(
-            f"{SUPABASE_URL}/rest/v1/bz_region_client_map?on_conflict=region_code",
-            json={
-                "region_code": region_code,
-                "client_id": client_id,
-                "breezeway_company_id": int(company_id) if company_id.isdigit() else None,
-                "is_active": True,
-            },
-            headers={
-                "apikey": SUPABASE_SERVICE_ROLE_KEY,
-                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-                "Content-Type": "application/json",
-                "Content-Profile": "tasks",
-                "Prefer": "resolution=merge-duplicates,return=minimal",
-            },
-            timeout=10,
-        )
-        if resp.status_code >= 300:
-            log.error("bz_region_client_map seed failed [%s]: %s", resp.status_code, resp.text[:200])
-        else:
-            log.info("seeded bz_region_client_map: %s -> client %s", region_code, client_id)
-    except Exception as e:  # noqa: BLE001
-        log.error("bz_region_client_map seed error for %s: %s", region_code, e)
-
-
 @app.post("/tenants/{tenant_id}/regions", status_code=201)
 def add_region(tenant_id: int, body: RegionCreate):
     """Validate Breezeway creds, then insert tenant_regions + api_tokens (active=false)."""
@@ -235,7 +200,6 @@ def add_region(tenant_id: int, body: RegionCreate):
                 token,
             ),
         )
-    _seed_supabase_region_map(body.region_code, tenant_id, body.breezeway_company_id)
     return {"region_code": region_row[0], "active": region_row[1], "validated": True}
 
 
