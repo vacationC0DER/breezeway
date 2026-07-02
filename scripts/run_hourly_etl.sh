@@ -43,20 +43,20 @@ TOTAL_JOBS=0
 FAILED_JOBS=0
 
 # Run properties for all regions
-log "Starting PROPERTIES ETL for all regions..."
-for region in $REGIONS; do
-    log "  → Running: $region / properties"
-    TOTAL_JOBS=$((TOTAL_JOBS + 1))
-    cd "$PROJECT_DIR"
-    python3 etl/run_etl.py "$region" properties >> "$LOG_FILE" 2>&1
-    EXIT_CODE=$?  # Capture exit code immediately
-    if [ $EXIT_CODE -eq 0 ]; then
-        log "  ✓ SUCCESS: $region / properties"
-    else
-        log "  ✗ FAILED: $region / properties"
-        FAILED_JOBS=$((FAILED_JOBS + 1))
-    fi
-done
+# [moved to daily 2026-07-02, ETL plan 2b.4] log "Starting PROPERTIES ETL for all regions..."
+# [moved to daily 2026-07-02, ETL plan 2b.4] for region in $REGIONS; do
+# [moved to daily 2026-07-02, ETL plan 2b.4]     log "  → Running: $region / properties"
+# [moved to daily 2026-07-02, ETL plan 2b.4]     TOTAL_JOBS=$((TOTAL_JOBS + 1))
+# [moved to daily 2026-07-02, ETL plan 2b.4]     cd "$PROJECT_DIR"
+# [moved to daily 2026-07-02, ETL plan 2b.4]     python3 etl/run_etl.py "$region" properties >> "$LOG_FILE" 2>&1
+# [moved to daily 2026-07-02, ETL plan 2b.4]     EXIT_CODE=$?  # Capture exit code immediately
+# [moved to daily 2026-07-02, ETL plan 2b.4]     if [ $EXIT_CODE -eq 0 ]; then
+# [moved to daily 2026-07-02, ETL plan 2b.4]         log "  ✓ SUCCESS: $region / properties"
+# [moved to daily 2026-07-02, ETL plan 2b.4]     else
+# [moved to daily 2026-07-02, ETL plan 2b.4]         log "  ✗ FAILED: $region / properties"
+# [moved to daily 2026-07-02, ETL plan 2b.4]         FAILED_JOBS=$((FAILED_JOBS + 1))
+# [moved to daily 2026-07-02, ETL plan 2b.4]     fi
+# [moved to daily 2026-07-02, ETL plan 2b.4] done
 
 # Run reservations for all regions
 log "Starting RESERVATIONS ETL for all regions..."

@@ -44,7 +44,7 @@ fi
 # (monthly cron does this). Default 35 days.
 export BZ_TASK_WINDOW_DAYS="${BZ_TASK_WINDOW_DAYS-35}"
 
-ENTITIES="tasks people supplies tags subdepartments templates property_tags reservation_tags"
+ENTITIES="properties tasks people supplies tags subdepartments templates property_tags reservation_tags"  # properties moved from hourly 2026-07-02 (2b.4): property-status webhook covers realtime; new-property discovery is daily
 
 # Track failures
 TOTAL_JOBS=0
