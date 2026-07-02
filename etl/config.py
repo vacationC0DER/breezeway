@@ -123,14 +123,11 @@ ENTITY_CONFIGS = {
         'natural_key': ['reservation_id', 'region_code'],
         'supports_incremental': False,
         'parent_fk': 'property_id',
-        'child_tables': {
-            'guests': {
-                'table_name': 'reservation_guests',
-                'api_field': 'guests',
-                'parent_fk': 'reservation_pk',
-                'natural_key': ['reservation_pk', 'guest_name', 'guest_email']
-            }
-        },
+        # reservation_guests child extractor removed 2026-07-02: configured
+        # since inception but produced 0 rows ever (API field empty on this
+        # plan tier) — a silent hourly no-op. Re-add if Breezeway exposes
+        # guest data. (ETL plan Task 1.5)
+        'child_tables': {},
         'fields_mapping': {
             'id': 'reservation_id',
             'property_id': 'property_id',
