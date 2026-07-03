@@ -70,7 +70,7 @@ COLS = [
     'region_code', 'property_id', 'reference_external_property_id', 'reference_company_id',
     'property_name', 'property_status', 'property_address1', 'property_address2',
     'property_city', 'property_state', 'property_zipcode',
-    'latitude_numeric', 'longitude_numeric', 'bedrooms', 'bathrooms', 'synced_at',
+    'latitude_numeric', 'longitude_numeric', 'bedrooms', 'bathrooms', 'wifi_name', 'wifi_password', 'synced_at',
 ]
 RENAME = {
     'property_id': 'breezeway_property_id',
@@ -78,6 +78,7 @@ RENAME = {
     'latitude_numeric': 'latitude',
     'longitude_numeric': 'longitude',
     'synced_at': 'source_synced_at',
+    'wifi_name': 'wifi_ssid',
 }
 # id-ish columns forced to text to match the target schema.
 TEXT_COLS = {'breezeway_property_id', 'guesty_listing_id', 'reference_company_id',
@@ -154,7 +155,7 @@ def push_batch(rows, dry):
         'apikey': SUPABASE_KEY,
         'Authorization': f'Bearer {SUPABASE_KEY}',
         'Content-Type': 'application/json',
-        'Content-Profile': 'tasks',
+        'Content-Profile': 'breezeway',
         'Prefer': 'resolution=merge-duplicates,return=minimal',
     }
     resp = requests.post(url, data=json.dumps(rows, default=str),
