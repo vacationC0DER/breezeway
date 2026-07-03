@@ -174,7 +174,7 @@ def push_batch(rows, dry):
         'apikey': SUPABASE_KEY,
         'Authorization': f'Bearer {SUPABASE_KEY}',
         'Content-Type': 'application/json',
-        'Content-Profile': 'tasks',
+        'Content-Profile': 'breezeway',
         'Prefer': 'resolution=merge-duplicates,return=minimal',
     }
     resp = requests.post(url, data=json.dumps(rows, default=str),

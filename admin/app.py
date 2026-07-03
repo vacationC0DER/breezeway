@@ -148,7 +148,7 @@ def _seed_supabase_region_map(region_code: str, client_id: int, company_id: str)
                 "apikey": SUPABASE_SERVICE_ROLE_KEY,
                 "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
                 "Content-Type": "application/json",
-                "Content-Profile": "tasks",
+                "Content-Profile": "breezeway",
                 "Prefer": "resolution=merge-duplicates,return=minimal",
             },
             timeout=10,
