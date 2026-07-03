@@ -475,11 +475,12 @@ class BreezewayETL:
 
             # For assignments
             elif child_name == 'assignments':
-                assignee = child.get('assignee', {})
+                # Breezeway returns the assignee at the TOP LEVEL of each
+                # assignment (assignee_id + name), NOT nested under 'assignee'.
                 transformed_child.update({
                     'task_id': str(parent_record.get('id', '')),
-                    'assignee_id': str(assignee.get('id', '')),
-                    'assignee_name': assignee.get('name'),
+                    'assignee_id': str(child.get('assignee_id', '')),
+                    'assignee_name': child.get('name'),
                     'assigned_at': child.get('assigned_at')
                 })
 
