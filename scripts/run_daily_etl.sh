@@ -113,6 +113,22 @@ else
 fi
 log ""
 
+log "Reconciling Breezeway property lifecycle (status/ext-id drift) for all regions..."
+START_TIME=$(date +%s)
+TOTAL_JOBS=$((TOTAL_JOBS + 1))
+cd "$PROJECT_DIR"
+python3 etl/property_lifecycle_reconcile.py all >> "$LOG_FILE" 2>&1
+EXIT_CODE=$?
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME))
+if [ $EXIT_CODE -eq 0 ]; then
+    log "  OK SUCCESS: property lifecycle reconcile / all regions (${DURATION}s)"
+else
+    log "  XX FAILED: property lifecycle reconcile / all regions (${DURATION}s)"
+    FAILED_JOBS=$((FAILED_JOBS + 1))
+fi
+log ""
+
 log "Pushing bz_property_dim -> Supabase (incremental) for all regions..."
 START_TIME=$(date +%s)
 TOTAL_JOBS=$((TOTAL_JOBS + 1))

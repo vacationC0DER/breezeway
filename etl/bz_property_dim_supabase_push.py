@@ -117,7 +117,14 @@ def get_watermark(conn, region):
             WHERE table_name = %s AND region_code = %s
         """, (TARGET_TABLE, region))
         row = cur.fetchone()
-    return row[0] if row else None
+    if not row or row[0] is None:
+        return None
+    # last_pushed_at is timestamptz (aware) but properties.synced_at is naive
+    # UTC -- normalize here or the max_synced comparison in run_region raises
+    # "can't compare offset-naive and offset-aware datetimes" (broke every
+    # daily push 2026-07-01 -> 2026-07-06).
+    ts = row[0]
+    return ts.replace(tzinfo=None) if ts.tzinfo else ts
 
 
 def set_watermark(conn, region, ts, rows_pushed):
