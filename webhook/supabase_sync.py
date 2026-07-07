@@ -25,7 +25,7 @@ SUPABASE_URL = (_ENV.get('SUPABASE_URL') or os.environ.get('SUPABASE_URL') or ''
 SUPABASE_SERVICE_ROLE_KEY = (_ENV.get('SUPABASE_SERVICE_ROLE_KEY')
                              or os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or '')
 
-_SCHEMA = 'tasks'          # bz_property_status lives in the Supabase `tasks` schema
+_SCHEMA = 'breezeway'      # tasks schema renamed to breezeway 2026-07-02 (vrgoals #995)
 _TABLE = 'bz_property_status'
 _CONFLICT = 'region_code,breezeway_property_id'
 _TIMEOUT = 8
@@ -87,7 +87,7 @@ def push_property_status(payload: dict, region_code: str, event_id=None) -> bool
         'apikey': SUPABASE_SERVICE_ROLE_KEY,
         'Authorization': f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
         'Content-Type': 'application/json',
-        'Content-Profile': _SCHEMA,   # target the `tasks` schema, not public
+        'Content-Profile': _SCHEMA,   # target the `breezeway` schema, not public
         'Prefer': 'resolution=merge-duplicates,return=minimal',
     }
 
