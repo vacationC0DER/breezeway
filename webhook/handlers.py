@@ -181,13 +181,21 @@ def process_task_event(payload: Dict[str, Any]) -> Dict[str, Any]:
         event_action=event_action
     )
     
-    # Try to update the task in the database
+    # Route by lifecycle action. Breezeway sends hyphenated actions
+    # (task-created / task-updated / task-deleted / task-cost-updated / ...).
+    # A delete must physically REMOVE the row: gw_edw.vr_task.mv_checkout_clean_match
+    # filters tasks only by type_department/name/date — never by status — so a
+    # soft-delete would leave the task in HK reconciliation (and paying out).
+    # Every non-delete action keeps the existing update path.
     error_message = None
     try:
-        update_task_from_webhook(payload)
+        if "delet" in str(event_action).lower():
+            delete_task_from_webhook(payload)
+        else:
+            update_task_from_webhook(payload)
     except Exception as e:
         error_message = str(e)
-        logger.error(f"Failed to update task from webhook: {e}")
+        logger.error(f"Failed to process task event ({event_action}): {e}")
     
     mark_event_processed(event_id, error_message)
     
@@ -313,7 +321,55 @@ def update_task_from_webhook(payload: Dict[str, Any]):
                 logger.info(f"Updated task {task_id} in region {region_code}")
             else:
                 logger.warning(f"Task {task_id} not found in region {region_code}")
-            
+
+            conn.commit()
+    finally:
+        if conn is not None:
+            return_db_connection(conn)
+
+
+def delete_task_from_webhook(payload: Dict[str, Any]):
+    """Remove a task that was deleted in Breezeway (event: task-deleted).
+
+    Hard DELETE by design: breezeway.tasks has no soft-delete column, and the
+    downstream gw_edw.vr_task.mv_checkout_clean_match MV selects tasks purely by
+    type_department / task_name / scheduled_date (never status). So the row must
+    physically leave breezeway.tasks for the MV — and therefore HK reconciliation
+    — to drop it; otherwise a task deleted in Breezeway keeps surfacing and paying
+    out. No FK references this table, so the delete is safe, and the full payload
+    is retained in breezeway.webhook_events for audit. Idempotent: a task already
+    gone (or never synced) yields rowcount 0 and is a no-op.
+    """
+    task_data = payload.get("task", payload)
+    company_id = task_data.get("company_id") or payload.get("company_id")
+    task_id = str(task_data.get("id", payload.get("task_id", "")))
+
+    if not task_id:
+        logger.warning("Cannot delete task: no task_id in payload")
+        return
+
+    region_code = get_region_by_company_id(int(company_id)) if company_id else "unknown"
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            if region_code != "unknown":
+                cur.execute(
+                    f"DELETE FROM {DB_SCHEMA}.tasks WHERE task_id = %s AND region_code = %s",
+                    (task_id, region_code),
+                )
+            else:
+                # Region unresolved (unmapped company_id): task_id is globally
+                # unique across regions in Breezeway, so deleting by task_id alone
+                # is safe and avoids stranding the row.
+                cur.execute(
+                    f"DELETE FROM {DB_SCHEMA}.tasks WHERE task_id = %s",
+                    (task_id,),
+                )
+            logger.info(
+                f"Deleted task {task_id} (region={region_code}) rows={cur.rowcount}"
+            )
             conn.commit()
     finally:
         if conn is not None:
